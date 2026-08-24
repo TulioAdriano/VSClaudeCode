@@ -32,7 +32,21 @@ code --extensionDevelopmentPath=C:\Users\tulio\source\repos\VSClaudeCode `
      --remote-debugging-port=9444 "$smoke\ScratchSln"
 ```
 
-Always use the isolated `--user-data-dir` — without it the CLI hands off to any running
-VS Code instance (his real one) and the dev extension never loads. The webview is an
-iframe inside the workbench page — CDP-attach to the page target, then drive the
-`vscode-webview://` iframe's execution context.
+Then `node tests/smoke-webview.mjs 9444` drives the panel over CDP, and
+`node tests/harness.mjs` tests the protocol layer with no VS Code at all.
+
+Hard-won launch/CDP facts (2026-08-23, VS Code 1.134):
+- Always use the isolated `--user-data-dir` — without it the CLI hands off to any
+  running VS Code instance (his real one) and the dev extension never loads.
+- Launch via `cmd /c code ... > log 2>&1` (Start-Process on the shim swallowed args
+  once); a stuck VS Code UPDATER (CodeSetup*.exe waiting for windows to close, inno
+  mutex `vscode-updating`) blocks ALL new instances — check for it when launches die
+  with an empty CDP target list.
+- Webview content is NESTED: the `vscode-webview://` iframe target's top frame is a
+  wrapper; the extension's HTML runs in a child execution context of the SAME target.
+  Attach flattened, collect `Runtime.executionContextCreated` events, probe each
+  contextId — the top context never has our DOM.
+- The exthost "webview without a content security policy" warning is a FALSE alarm:
+  the injected CSP meta is verifiably in the live DOM. Don't chase it.
+- Webview `localStorage` persists across full VS Code restarts (stable per-extension
+  origins) — prefs need no host-persistence shim.
