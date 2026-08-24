@@ -1,8 +1,8 @@
 {
   "name": "vsclaudecode",
-  "displayName": "VSClaudeCode",
-  "description": "Unofficial Claude Code chat panel for VS Code - the VSClaude experience (per-message model attribution, model management, usage limits, auth recovery) powered by your installed Claude Code CLI.",
-  "version": "0.1.0",
+  "displayName": "VSClaude Code",
+  "description": "Unofficial Claude Code chat panel for VS Code - the VSClaude experience (per-message model attribution, model management, usage limits, auth recovery) powered by your installed Claude Code CLI. Not affiliated with Anthropic's official extension.",
+  "version": "0.1.1",
   "publisher": "TulioAdriano",
   "private": true,
   "license": "UNLICENSED",
@@ -26,7 +26,7 @@
       "activitybar": [
         {
           "id": "vsclaudecode",
-          "title": "Claude Code",
+          "title": "VSClaude Code",
           "icon": "media/icon.svg"
         }
       ]
@@ -43,15 +43,15 @@
     "commands": [
       {
         "command": "vsclaudecode.open",
-        "title": "Claude Code: Open Chat"
+        "title": "VSClaude Code: Open Chat"
       },
       {
         "command": "vsclaudecode.newConversation",
-        "title": "Claude Code: New Conversation"
+        "title": "VSClaude Code: New Conversation"
       },
       {
         "command": "vsclaudecode.insertSelection",
-        "title": "Claude Code: Add Selection to Chat"
+        "title": "VSClaude Code: Add Selection to Chat"
       }
     ],
     "keybindings": [

@@ -95,7 +95,32 @@ const withTranscript = sessions[0] && sessionStore.readTranscriptAll(slnDir, ses
 ok("transcript reads", Array.isArray(withTranscript) && withTranscript.length > 0,
   withTranscript && withTranscript.length + " entries");
 
-// ---- 5. title generator -----------------------------------------------------
+// ---- 5. ide MCP server (injected fake host — no vscode needed) --------------
+const { IdeMcpServer } = require(path.join(repo, "src", "ideMcpServer.js"));
+const fakeHost = {
+  getCurrentSelection: async () => ({ text: "sel", filePath: "C:\\x\\a.cs", startLine: 1, startCharacter: 0, endLine: 2, endCharacter: 5, isEmpty: false }),
+  getLatestSelection: () => null,
+  getOpenEditors: async () => [{ filePath: "C:\\x\\a.cs", isActive: true, isDirty: false }],
+  getWorkspaceFolders: () => ["C:\\x"],
+  getDiagnostics: async () => [{ filePath: "C:\\x\\a.cs", message: "CS0000 boom", severity: "Error", source: "csc", code: "CS0000", line: 3, character: 7 }],
+};
+const ide = new IdeMcpServer(fakeHost);
+const initResp = await ide.handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+ok("ide initialize handshake", initResp.result && initResp.result.serverInfo.name === "ide",
+  initResp.result && initResp.result.serverInfo.title);
+const toolsResp = await ide.handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+ok("ide tools/list surface matches VSClaude (11 tools)", toolsResp.result.tools.length === 11);
+const diagResp = await ide.handle({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "getDiagnostics", arguments: {} } });
+const diagText = diagResp.result.content[0].text;
+ok("ide getDiagnostics result shape", diagText.includes("CS0000 boom") && diagText.includes("file:///"));
+const selResp = await ide.handle({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "getCurrentSelection", arguments: {} } });
+ok("ide getCurrentSelection", JSON.parse(selResp.result.content[0].text).success === true);
+const notif = await ide.handle({ jsonrpc: "2.0", method: "notifications/initialized" });
+ok("ide notification gets generic ack", notif.id === 0);
+const unknown = await ide.handle({ jsonrpc: "2.0", id: 5, method: "bogus/method" });
+ok("ide unknown method -> -32601", !!unknown.error && unknown.error.code === -32601);
+
+// ---- 6. title generator -----------------------------------------------------
 const title = await titleGenerator.generate(mockExe, "Fix the flaky USB driver init bug");
 ok("title generator one-shot", title === "Mock Generated Title", title);
 

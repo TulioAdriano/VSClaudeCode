@@ -8,6 +8,9 @@ const suggestEl = $("suggest-pop"), sessionsPanel = $("sessions-panel"), session
 const welcomeEl = $("welcome");
 
 const bridge = window.chrome && window.chrome.webview ? window.chrome.webview : null;
+// Product name comes from the page title so each host (VS panel, VS Code port)
+// brands the header/welcome without diverging this shared file.
+const APP_TITLE = document.title || "Claude Code";
 const state = {
   running: false, working: false, mode: "default", model: "",
   sessionId: null, cwd: "", ideConnections: 0, mock: false,
@@ -1095,7 +1098,7 @@ function handleHostMessage(data) {
       state.sessionTitle = data.resume ? (state.pendingResumeTitle || null) : null;
       state.manualTitle = false;
       state.turnModel = null; state.historyModel = null;
-      $("session-title").textContent = state.sessionTitle || "Claude Code";
+      $("session-title").textContent = state.sessionTitle || APP_TITLE;
       state.pendingResumeTitle = null;
       showLoading(data.resume ? "Loading conversation…" : "Starting Claude…");
       updateWelcome();
@@ -2108,19 +2111,19 @@ titleEl.addEventListener("dblclick", () => {
 });
 titleEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); titleEl.blur(); }
-  if (e.key === "Escape") { titleEl.textContent = titleBeforeEdit || "Claude Code"; titleEl.blur(); }
+  if (e.key === "Escape") { titleEl.textContent = titleBeforeEdit || APP_TITLE; titleEl.blur(); }
 });
 titleEl.addEventListener("blur", () => {
   if (titleEl.contentEditable !== "true") return;
   titleEl.contentEditable = "false";
   const title = titleEl.textContent.trim();
-  if (title && title !== "Claude Code" && title !== titleBeforeEdit) {
+  if (title && title !== APP_TITLE && title !== titleBeforeEdit) {
     state.sessionTitle = title;
     state.manualTitle = true;
     post({ cmd: "rename", title });
   } else {
     // Cancelled, cleared, or unchanged — restore what was there.
-    titleEl.textContent = state.sessionTitle || "Claude Code";
+    titleEl.textContent = state.sessionTitle || APP_TITLE;
   }
 });
 

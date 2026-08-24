@@ -11,6 +11,7 @@ const { spawn } = require("child_process");
 const { ClaudeCliSession, resolveExecutable } = require("./cliSession");
 const sessionStore = require("./sessionStore");
 const titleGenerator = require("./titleGenerator");
+const { IdeMcpServer, createVsCodeIdeHost } = require("./ideMcpServer");
 
 const HISTORY_PAGE_SIZE = 400;
 let cliUpdateChecked = false; // once per VS Code window
@@ -38,6 +39,9 @@ class ChatController {
     this._authPollTimer = null;
     this._disposed = false;
     this._disposables = [];
+    this._sdkIdeActive = false;
+    this._ideHost = createVsCodeIdeHost(() => this._cwd);
+    this._ideServer = new IdeMcpServer(this._ideHost, (line) => this._log("[ide] " + line));
 
     this._disposables.push(
       vscode.window.onDidChangeTextEditorSelection((e) => this._onSelectionChanged(e)),
@@ -220,10 +224,15 @@ class ChatController {
       permissionMode: mode,
       effort,
       resumeSessionId: resumeSessionId || null,
+      registerSdkIdeServer: true,
       environment: {},
     });
     session.permissionHandler = (requestId, request, signal) =>
       this._handlePermissionRequest(requestId, request, signal);
+    session.mcpMessageHandler = (serverName, message) =>
+      serverName === "ide"
+        ? this._ideServer.handle(message)
+        : Promise.resolve({ jsonrpc: "2.0", id: message.id ?? 0, error: { code: -32601, message: "Unknown SDK server " + serverName } });
     session.onMessage = (m) => this._onClaudeMessage(m);
     session.onStderr = (line) => {
       this._log("[claude-stderr] " + line);
@@ -271,8 +280,9 @@ class ChatController {
     this.pushState();
 
     try {
-      const init = await session.initialize(null);
+      const init = await session.initialize({ sdkMcpServers: ["ide"] });
       this._initData = init;
+      this._sdkIdeActive = true;
       this._post({ kind: "init", data: init });
       this._fetchUsage(true);
       // Ultracode is a session flag, not a spawn arg — apply it after initialize.
@@ -586,7 +596,7 @@ class ChatController {
         sessionId: this._session ? this._session.lastSessionId : null,
         ideConnections: 0,
         idePort: null,
-        sdkIde: false,
+        sdkIde: this._sdkIdeActive && !!(this._session && this._session.isRunning),
         effort: this._effort,
         exePath,
         mock: exePath.toLowerCase().includes("mockclaude"),
@@ -706,6 +716,7 @@ class ChatController {
     clearInterval(this._authPollTimer);
     clearTimeout(this._workspaceTimer);
     for (const d of this._disposables) { try { d.dispose(); } catch { } }
+    try { this._ideHost.dispose(); } catch { }
     if (this._session) this._session.dispose();
   }
 }

@@ -130,6 +130,19 @@ console.log("[ok] theme:", theme);
 if (!th.vsBg) throw new Error("VS Code theme variables not present in webview");
 if (!th.bg || th.bg !== th.vsBg) throw new Error("--bg not mapped to VS Code sideBar background: " + theme);
 
+// ---- 2.5 branding + IDE dot -------------------------------------------------
+const brand = await evaluate(`JSON.stringify({
+  docTitle: document.title,
+  header: document.getElementById('session-title').textContent,
+  dotOn: document.getElementById('ide-dot').className.includes('on'),
+  dotTitle: document.getElementById('ide-dot').title,
+})`);
+const br = JSON.parse(brand);
+console.log("[ok] branding/dot:", brand);
+if (br.docTitle !== "VSClaude Code" || br.header !== "VSClaude Code")
+  throw new Error("branding not applied: " + brand);
+if (!br.dotOn) throw new Error("IDE dot is not green (sdkIde inactive): " + brand);
+
 // ---- 3. storage -------------------------------------------------------------
 const storage = await evaluate(`(function(){
   try { localStorage.setItem('vsclaudecode.smoke', 'x'); return localStorage.getItem('vsclaudecode.smoke') === 'x'; }
