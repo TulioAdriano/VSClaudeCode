@@ -1,0 +1,12 @@
+/* Maps VS Code's injected theme variables onto the webui's design tokens.
+   Loaded AFTER app.css so these win; outside VS Code the vars are undefined
+   and the fallbacks reproduce app.css's own dark defaults. */
+:root {
+  --bg: var(--vscode-sideBar-background, #1f1f1f);
+  --fg: var(--vscode-sideBar-foreground, var(--vscode-foreground, #d6d6d6));
+  --border: var(--vscode-panel-border, #3c3c40);
+  --input-bg: var(--vscode-input-background, #29292c);
+  --accent: var(--vscode-button-background, #7c6ae8);
+  --accent-fg: var(--vscode-button-foreground, #ffffff);
+  --link: var(--vscode-textLink-foreground, #4daafc);
+}

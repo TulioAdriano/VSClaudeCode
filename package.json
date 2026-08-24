@@ -1,0 +1,109 @@
+{
+  "name": "vsclaudecode",
+  "displayName": "VSClaudeCode",
+  "description": "Unofficial Claude Code chat panel for VS Code - the VSClaude experience (per-message model attribution, model management, usage limits, auth recovery) powered by your installed Claude Code CLI.",
+  "version": "0.1.0",
+  "publisher": "TulioAdriano",
+  "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TulioAdriano/VSClaudeCode.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vsclaudecode",
+          "title": "Claude Code",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "vsclaudecode": [
+        {
+          "type": "webview",
+          "id": "vsclaudecode.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "vsclaudecode.open",
+        "title": "Claude Code: Open Chat"
+      },
+      {
+        "command": "vsclaudecode.newConversation",
+        "title": "Claude Code: New Conversation"
+      },
+      {
+        "command": "vsclaudecode.insertSelection",
+        "title": "Claude Code: Add Selection to Chat"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "vsclaudecode.newConversation",
+        "key": "ctrl+alt+c",
+        "when": "!terminalFocus"
+      },
+      {
+        "command": "vsclaudecode.insertSelection",
+        "key": "ctrl+alt+k",
+        "when": "editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "VSClaudeCode",
+      "properties": {
+        "vsclaudecode.claudeExecutablePath": {
+          "type": "string",
+          "default": "",
+          "description": "Full path to the Claude Code CLI (claude.exe / claude). Empty = auto-detect from ~/.local/bin and PATH."
+        },
+        "vsclaudecode.defaultModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model for new conversations (empty = CLI default)."
+        },
+        "vsclaudecode.defaultPermissionMode": {
+          "type": "string",
+          "default": "default",
+          "enum": ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"],
+          "description": "Permission mode for new conversations."
+        },
+        "vsclaudecode.showPreviousModels": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show superseded model versions under \"Other models\" in the model picker."
+        },
+        "vsclaudecode.autoUpdateCli": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run `claude update` in the background once per window so the CLI and its model catalog stay current."
+        },
+        "vsclaudecode.logProtocol": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log the CLI stream-JSON protocol to the VSClaudeCode output channel."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "npx --yes @vscode/vsce package --allow-missing-repository"
+  }
+}

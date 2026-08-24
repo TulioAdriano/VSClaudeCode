@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Claude Code</title>
+<link rel="icon" href="data:," /><!-- suppress Chromium's automatic /favicon.ico probe (console ERR_FILE_NOT_FOUND noise) -->
+<link rel="stylesheet" href="app.css" />
+<link rel="stylesheet" href="vscode-theme.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <div class="left">
+        <span id="session-title" title="Double-click to rename">Claude Code</span>
+        <span id="ide-dot" class="dot off" title="IDE integration"></span>
+        <span id="mock-badge" class="badge hidden">MOCK</span>
+      </div>
+      <div class="right">
+        <button id="btn-sessions" class="icon-btn" title="Past conversations (history)">
+          <svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M8 1.5A6.5 6.5 0 1 0 14.5 8 6.5 6.5 0 0 0 8 1.5zM8 13A5 5 0 1 1 13 8 5 5 0 0 1 8 13zm.75-8.25v3.04l2.4 1.44-.6 1.02L7.25 8.5V4.75z"/></svg>
+        </button>
+        <button id="btn-new" class="icon-btn" title="New conversation (Ctrl+Alt+C)">
+          <svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M8 2.5a.75.75 0 0 1 .75.75v4h4a.75.75 0 0 1 0 1.5h-4v4a.75.75 0 0 1-1.5 0v-4h-4a.75.75 0 0 1 0-1.5h4v-4A.75.75 0 0 1 8 2.5z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div id="banners"></div>
+
+    <div id="chat-area">
+    <main id="messages" aria-live="polite"></main>
+
+    <div id="welcome" class="hidden">
+      <div class="spark">✳</div>
+      <div class="w-title">Claude Code</div>
+      <div class="w-sub">Your Claude, natively in VS Code — powered by the Claude Code CLI and your own subscription.</div>
+      <div id="welcome-signin" class="hidden">
+        <button id="btn-signin" class="primary big">Sign in to Claude</button>
+        <div class="w-note">A terminal opens to complete the sign-in with your Claude account. This panel continues automatically when you're done.</div>
+        <div id="signin-waiting" class="hidden"><span class="spinner"></span> Waiting for sign-in to finish…</div>
+      </div>
+      <div id="welcome-tips">
+        <div class="tip"><kbd>@</kbd> reference files from your solution</div>
+        <div class="tip"><kbd>/</kbd> commands &amp; skills</div>
+        <div class="tip"><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>K</kbd> add the current selection</div>
+        <div class="tip"><kbd>Esc</kbd> interrupt Claude while working</div>
+      </div>
+    </div>
+
+    <div id="loading-overlay" class="hidden">
+      <span class="spinner"></span>
+      <span id="loading-label">Loading conversation…</span>
+    </div>
+
+    <button id="jump-pill" class="hidden" title="Jump to latest">
+      <svg viewBox="0 0 16 16" width="13" height="13"><path fill="currentColor" d="M8 12.5 3 7.5l1.06-1.06L8 10.38l3.94-3.94L13 7.5z"/></svg>
+      Latest
+    </button>
+
+    <div id="sessions-panel" class="hidden">
+      <div class="panel-head">
+        <span>Past conversations</span>
+        <span id="account-chip"></span>
+        <button id="btn-sessions-close" class="icon-btn">✕</button>
+      </div>
+      <input id="sessions-search" type="text" placeholder="Search conversations…" />
+      <div id="sessions-list"></div>
+    </div>
+    </div>
+
+    <footer id="composer-area">
+      <div id="usage-banner-slot"></div>
+      <div id="context-chip" class="hidden"></div>
+      <div id="attachments"></div>
+      <div id="suggest-pop" class="hidden"></div>
+      <div id="composer">
+        <textarea id="input" rows="1"
+          placeholder="Ask Claude anything… (@ files, / commands)"></textarea>
+        <button id="btn-send" title="Send (Enter)">
+          <svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M1.72 1.68a.75.75 0 0 1 .79-.1l12 5.75a.75.75 0 0 1 0 1.34l-12 5.75a.75.75 0 0 1-1.05-.87L3.1 8 1.46 2.45a.75.75 0 0 1 .26-.77zM4.4 8.75l-1.05 3.57L12.06 8 3.35 3.68 4.4 7.25H9a.75.75 0 0 1 0 1.5z"/></svg>
+        </button>
+        <button id="btn-stop" class="hidden" title="Stop (Esc)">
+          <svg viewBox="0 0 16 16" width="13" height="13"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>
+        </button>
+      </div>
+      <div id="statusbar">
+        <select id="mode-select" class="pill" title="Permission mode">
+          <option value="default">Ask before acting</option>
+          <option value="acceptEdits">Accept edits</option>
+          <option value="plan">Plan first</option>
+          <option value="auto">Auto approve</option>
+          <option value="dontAsk">Don't ask (deny)</option>
+          <option value="bypassPermissions">Bypass permissions</option>
+        </select>
+        <select id="model-select" class="pill" title="Model">
+          <option value="default">Default model</option>
+        </select>
+        <select id="effort-select" class="pill" title="Reasoning effort">
+          <option value="low">Low effort</option>
+          <option value="medium">Medium effort</option>
+          <option value="high" selected>High effort</option>
+          <option value="xhigh">Extra High effort</option>
+          <option value="max">Max effort</option>
+          <option value="ultracode">Ultracode</option>
+        </select>
+        <span id="turn-stats" title="Last turn"></span>
+        <span id="usage-chip" class="hidden" title="Plan usage — click to refresh"></span>
+        <span id="context-bar" title="Context window usage"><span id="context-fill"></span></span>
+        <span id="cwd" title=""></span>
+      </div>
+    </footer>
+  </div>
+  <script src="vscode-bridge.js"></script>
+  <script src="vendor/highlight.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
