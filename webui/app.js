@@ -1984,6 +1984,7 @@ function maybeSuggest() {
   const text = inputEl.value.slice(0, pos);
   const slash = text.match(/^\/(\w*)$/);
   const at = text.match(/(^|\s)@([\w./\\-]*)$/);
+  const hash = text.match(/(^|\s)#(\w*)$/);
   if (slash) {
     state.suggestKind = "command";
     state.suggestAnchor = 0;
@@ -1995,22 +1996,37 @@ function maybeSuggest() {
     showSuggest(items);
   } else if (at) {
     state.suggestKind = "file";
-    state.suggestAnchor = pos - at[2].length;
+    state.suggestAnchor = pos - at[2].length; // keep the typed @, replace the query
     const token = ++state.suggestToken;
-    post({ cmd: "suggest", token: String(token), query: at[2] });
+    post({ cmd: "suggest", token: String(token), query: at[2], kind: "file" });
+  } else if (hash) {
+    // Symbol references (Copilot-style): #query searches workspace symbols; accepting
+    // inserts a precise @file#Lstart-end mention, replacing the # and the query.
+    state.suggestKind = "symbol";
+    state.suggestAnchor = pos - hash[2].length - 1;
+    const token = ++state.suggestToken;
+    post({ cmd: "suggest", token: String(token), query: hash[2], kind: "symbol" });
   } else {
     hideSuggest();
   }
 }
 function applySuggestions(data) {
-  if (state.suggestKind !== "file") return;
+  if (state.suggestKind !== "file" && state.suggestKind !== "symbol") return;
   if (data.token !== String(state.suggestToken)) return;
-  const raw = (data.data && (data.data.suggestions || data.data.files || data.data.results)) || [];
-  const items = raw.slice(0, 20).map(entry => {
-    const path = typeof entry === "string" ? entry : entry.path || entry.display || "";
-    return { label: path.split(/[\\/]/).pop(), insert: path.replace(/\\/g, "/") + " ", desc: path };
-  }).filter(i => i.desc);
-  showSuggest(items);
+  const d = data.data || {};
+  let items;
+  if (Array.isArray(d.items)) {
+    // Host-built items ({label, insert, desc}) — files, folders, or symbols.
+    items = d.items.slice(0, 20).map(it => ({ label: it.label || it.insert, insert: it.insert, desc: it.desc || "" }));
+  } else {
+    // Legacy CLI file_suggestions shapes (paths only).
+    const raw = (d.suggestions || d.files || d.results) || [];
+    items = raw.slice(0, 20).map(entry => {
+      const path = typeof entry === "string" ? entry : entry.path || entry.display || "";
+      return { label: path.split(/[\\/]/).pop(), insert: path.replace(/\\/g, "/") + " ", desc: path };
+    });
+  }
+  showSuggest(items.filter(i => i.insert));
 }
 function showSuggest(items) {
   state.suggestItems = items;

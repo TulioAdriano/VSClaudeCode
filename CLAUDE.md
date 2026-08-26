@@ -28,9 +28,15 @@ $env:CLAUDE_CONFIG_DIR = "$smoke\cfg"
 $env:VSCLAUDE_MOCK_LAZY_INIT = "1"
 $env:VSCLAUDE_AUTO_OPEN = "1"
 code --extensionDevelopmentPath=C:\Users\tulio\source\repos\VSClaudeCode `
-     --user-data-dir="$smoke\vscode-udd" --new-window `
+     --user-data-dir="$smoke\vscode-udd" --new-window --disable-workspace-trust `
      --remote-debugging-port=9444 "$smoke\ScratchSln"
 ```
+
+`--disable-workspace-trust` is required: Restricted Mode silently disables tsserver
+(and other language services), so the # symbol-suggestion step gets zero workspace
+symbols and fails. Also known: the real CLI's `file_suggestions` control request
+returns `{"suggestions":[]}` in print-mode sessions — @ suggestions must be built
+by the host (workspace scan), never expected from the CLI.
 
 Then `node tests/smoke-webview.mjs 9444` drives the panel over CDP, and
 `node tests/harness.mjs` tests the protocol layer with no VS Code at all.

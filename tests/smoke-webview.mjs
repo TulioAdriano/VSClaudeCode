@@ -165,6 +165,61 @@ await evaluate(`(function(){document.getElementById('btn-sessions').click();retu
 await waitFor("document.querySelectorAll('#sessions-list .session-item, #sessions-list .item, #sessions-list > *').length >= 1", 15000, "sessions panel lists fixture sessions");
 await evaluate(`(function(){document.getElementById('btn-sessions-close').click();return true;})()`);
 
+// ---- 5.5 @-file/folder suggestions + #-symbol references --------------------
+// The host scans the workspace itself (the real CLI's file_suggestions is empty
+// in print mode). ScratchSln has an App/ folder with App.csproj + Program.cs.
+const triggerSuggest = (text) => evaluate(`(function(){
+  const i = document.getElementById('input');
+  i.value = ${JSON.stringify(text)};
+  i.selectionStart = i.selectionEnd = i.value.length;
+  i.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+})()`);
+await triggerSuggest("@app");
+await waitFor(`(function(){
+  const p = document.getElementById('suggest-pop');
+  if (p.classList.contains('hidden')) return false;
+  const descs = Array.from(p.querySelectorAll('.suggest-item .desc')).map(d => d.textContent);
+  return descs.some(d => d.startsWith('folder · ')) && descs.some(d => /App\\.csproj|Program\\.cs/.test(d));
+})()`, 15000, "@ popup lists folders AND files");
+await evaluate(`(function(){
+  const items = Array.from(document.querySelectorAll('#suggest-pop .suggest-item'));
+  items.find(it => it.querySelector('.desc').textContent.startsWith('folder · ')).click();
+  return true;
+})()`);
+const atInserted = await evaluate(`document.getElementById('input').value`);
+if (!/^@[\w./-]+\/ $/.test(atInserted)) throw new Error("folder accept produced: " + JSON.stringify(atInserted));
+console.log("[ok] folder mention inserted:", JSON.stringify(atInserted.trim()));
+
+// Symbols need a JS file (built-in tsserver provides workspace symbols with no
+// extra extensions). Drop one, open it via the host to activate the provider.
+const symFile = path.join(process.env.LOCALAPPDATA || "", "Temp", "vsclaude-smoke", "ScratchSln", "smoke-symbols.js");
+fs.writeFileSync(symFile, "function smokeSymbolTarget(a, b) {\n  return a + b;\n}\nmodule.exports = { smokeSymbolTarget };\n");
+await evaluate(`(function(){ post({ cmd: "openFile", path: "smoke-symbols.js" }); return true; })()`);
+await sleep(4000); // tsserver warm-up after the file opens
+let symbolShown = false;
+for (let attempt = 0; attempt < 10 && !symbolShown; attempt++) {
+  await triggerSuggest("#smokeSymbol");
+  await sleep(1500);
+  symbolShown = await evaluate(`(function(){
+    const p = document.getElementById('suggest-pop');
+    if (p.classList.contains('hidden')) return false;
+    return Array.from(p.querySelectorAll('.suggest-item .label')).some(l => l.textContent.includes('smokeSymbolTarget'));
+  })()`);
+}
+if (!symbolShown) throw new Error("# symbol popup never listed smokeSymbolTarget");
+console.log("[ok] # popup lists workspace symbols");
+await evaluate(`(function(){
+  const items = Array.from(document.querySelectorAll('#suggest-pop .suggest-item'));
+  items.find(it => it.querySelector('.label').textContent.includes('smokeSymbolTarget')).click();
+  return true;
+})()`);
+const symInserted = await evaluate(`document.getElementById('input').value`);
+if (!/^@smoke-symbols\.js#L\d+(-\d+)? $/.test(symInserted))
+  throw new Error("symbol accept produced: " + JSON.stringify(symInserted));
+console.log("[ok] symbol mention inserted:", JSON.stringify(symInserted.trim()));
+await evaluate(`(function(){ const i = document.getElementById('input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+
 // ---- 6. pixels --------------------------------------------------------------
 const shot = await send("Page.captureScreenshot", { format: "png" }, webviewSession).catch(() => null);
 if (shot && shot.data) {

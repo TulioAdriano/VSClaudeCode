@@ -136,12 +136,18 @@ class ChatController {
           break;
         }
         case "suggest": {
+          // The CLI's file_suggestions returns {"suggestions":[]} in print-mode sessions
+          // (verified live 2026-08-24), so the host builds suggestions itself: a cached
+          // workspace scan for @ (files AND folders — folders are our extra over the
+          // official extension), workspace symbol providers for # (Copilot-style).
           const token = msg.token || "";
-          let data = {};
+          let items = [];
           try {
-            if (this._session) data = await this._session.fileSuggestions(msg.query || "");
-          } catch { }
-          this._post({ kind: "suggestions", token, data });
+            items = msg.kind === "symbol"
+              ? await this._symbolSuggestions(msg.query || "")
+              : await this._fileSuggestions(msg.query || "");
+          } catch (e) { this._log("suggest failed: " + e.message); }
+          this._post({ kind: "suggestions", token, data: { items } });
           break;
         }
         case "openFile": {
@@ -512,6 +518,84 @@ class ChatController {
 
     this._hadUserMessage = true;
     await this._session.sendUserMessage(blocks);
+  }
+
+  /** Workspace file + folder suggestions for @-mentions. One findFiles scan, cached
+   *  briefly so per-keystroke queries stay instant. */
+  async _fileSuggestions(query) {
+    const now = Date.now();
+    if (!this._fileScanCache || now - this._fileScanCacheAt > 10000) {
+      const uris = await vscode.workspace.findFiles("**/*", "**/{node_modules,.git,bin,obj,dist,out,.vs,.vscode-test}/**", 3000);
+      const cwd = this._resolveCwd().toLowerCase();
+      const files = [];
+      const folders = new Set();
+      for (const uri of uris) {
+        let rel = uri.fsPath;
+        if (rel.toLowerCase().startsWith(cwd)) rel = rel.slice(cwd.length).replace(/^[\\/]+/, "");
+        rel = rel.replace(/\\/g, "/");
+        files.push(rel);
+        for (let d = rel; d.includes("/");) {
+          d = d.slice(0, d.lastIndexOf("/"));
+          folders.add(d);
+        }
+      }
+      this._fileScanCache = { files, folders: [...folders] };
+      this._fileScanCacheAt = now;
+    }
+    const q = query.toLowerCase().replace(/\\/g, "/");
+    const rank = (rel) => {
+      const lower = rel.toLowerCase();
+      const base = lower.slice(lower.lastIndexOf("/") + 1);
+      if (!q) return base ? 2 : -1;
+      if (base.startsWith(q)) return 0;
+      if (base.includes(q)) return 1;
+      if (lower.includes(q)) return 2;
+      return -1;
+    };
+    const pick = (list) => list
+      .map((rel) => ({ rel, r: rank(rel) }))
+      .filter((x) => x.r >= 0)
+      .sort((a, b) => a.r - b.r || a.rel.length - b.rel.length)
+      .map((x) => x.rel);
+    const folderItems = pick(this._fileScanCache.folders).slice(0, 5).map((rel) => ({
+      label: rel.slice(rel.lastIndexOf("/") + 1) + "/",
+      insert: rel + "/ ",
+      desc: "folder · " + rel,
+    }));
+    const fileItems = pick(this._fileScanCache.files).slice(0, 15).map((rel) => ({
+      label: rel.slice(rel.lastIndexOf("/") + 1),
+      insert: rel + " ",
+      desc: rel,
+    }));
+    return [...folderItems, ...fileItems].slice(0, 20);
+  }
+
+  /** Workspace symbol suggestions for #-references; accepting inserts a precise
+   *  @file#Lstart-end mention (a range the CLI already resolves and attaches). */
+  async _symbolSuggestions(query) {
+    if (!query) return [];
+    const symbols = await vscode.commands.executeCommand("vscode.executeWorkspaceSymbolProvider", query) || [];
+    const cwd = this._resolveCwd().toLowerCase();
+    const kindName = (k) => {
+      for (const name of Object.keys(vscode.SymbolKind))
+        if (vscode.SymbolKind[name] === k) return name.toLowerCase();
+      return "symbol";
+    };
+    return symbols
+      .filter((s) => s.location && s.location.uri && s.location.uri.scheme === "file")
+      .slice(0, 20)
+      .map((s) => {
+        let rel = s.location.uri.fsPath;
+        if (rel.toLowerCase().startsWith(cwd)) rel = rel.slice(cwd.length).replace(/^[\\/]+/, "");
+        rel = rel.replace(/\\/g, "/");
+        const start = s.location.range.start.line + 1;
+        const end = s.location.range.end.line + 1;
+        return {
+          label: s.name,
+          insert: "@" + rel + "#L" + start + (end > start ? "-" + end : "") + " ",
+          desc: kindName(s.kind) + (s.containerName ? " · " + s.containerName : "") + " · " + rel,
+        };
+      });
   }
 
   /** Ambient selection context, like the VS panel's injected <ide-context> block. */

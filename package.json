@@ -2,7 +2,7 @@
   "name": "vsclaudecode",
   "displayName": "VSClaude Code",
   "description": "Unofficial Claude Code chat panel for VS Code - the VSClaude experience (per-message model attribution, model management, usage limits, auth recovery) powered by your installed Claude Code CLI. Not affiliated with Anthropic's official extension.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "TulioAdriano",
   "private": true,
   "license": "UNLICENSED",
