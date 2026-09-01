@@ -38,6 +38,15 @@ symbols and fails. Also known: the real CLI's `file_suggestions` control request
 returns `{"suggestions":[]}` in print-mode sessions — @ suggestions must be built
 by the host (workspace scan), never expected from the CLI.
 
+Remote Control (0.4.0): `src/remoteBridge.js` runs the Agent SDK's /bridge export
+IN-PROCESS (this host is Node — no sidecar process like the VS extension). SDK
+pinned (see SDK_PIN) in `%LOCALAPPDATA%\VSClaude\sdk`, shared with VSClaude; auth
+comes from `~/.claude/.credentials.json` (`claudeAiOauth.accessToken`). Add
+`VSCLAUDE_MOCK_BRIDGE=1` + `VSCLAUDE_FOREIGN_SESSIONS=1` to the smoke env: the
+mock bridge logs ops to `<cfg>/mock-bridge-log.jsonl` and injects a scripted
+inbound message; foreign sessions are listed only with the setting/env on.
+Version numbers are LOCKSTEPPED with VSClaude (both jumped to 0.4.0 together).
+
 Then `node tests/smoke-webview.mjs 9444` drives the panel over CDP, and
 `node tests/harness.mjs` tests the protocol layer with no VS Code at all.
 

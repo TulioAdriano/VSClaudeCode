@@ -265,9 +265,15 @@ $("jump-pill").addEventListener("click", () => {
 });
 
 /* ---------- messages ---------- */
-function addUserMessage(text, attachments) {
+function addUserMessage(text, attachments, opts) {
   const div = document.createElement("div");
-  div.className = "msg user";
+  div.className = "msg user" + (opts && opts.remote ? " remote" : "");
+  if (opts && opts.remote) {
+    const tag = document.createElement("div");
+    tag.className = "remote-tag";
+    tag.textContent = "📱 sent remotely";
+    div.appendChild(tag);
+  }
   const md = document.createElement("div");
   md.className = "md";
   md.innerHTML = renderMarkdown(text || "");
@@ -675,7 +681,9 @@ function handleUserMessage(m) {
       }
     }
   }
-  if (!hadToolResult && state.replayingHistory) {
+  // Live user messages render only for remote-originated ones (kind:"claude" pushes
+  // from the bridge) — local sends already drew their bubble in send().
+  if (!hadToolResult && (state.replayingHistory || m._vsclaudeRemote)) {
     let text = "";
     const images = [];
     if (typeof content === "string") text = content;
@@ -688,7 +696,8 @@ function handleUserMessage(m) {
     text = (text || "").trim();
     if ((text && !text.startsWith("<") && !text.startsWith("Caveat:")) || images.length) {
       flushHistoryModelFooter(); // close the previous turn's assistant run
-      addUserMessage(text, images);
+      addUserMessage(text, images, { remote: !!m._vsclaudeRemote });
+      if (m._vsclaudeRemote) setWorking(true); // the host feeds it to the CLI; a turn is starting
     }
   }
 }
@@ -1112,14 +1121,21 @@ function handleHostMessage(data) {
     case "usage":
       applyUsage(data.data);
       break;
-    case "workspaceChanged":
+    case "workspaceChanged": {
       // The solution changed under us (opened late at startup, or switched). Re-home the
-      // chat: silently when nothing was said yet, with a note when a conversation existed
-      // (it stays resumable from the previous workspace's history).
-      if (data.hadConversation)
+      // chat: silently when nothing was said yet; with a note + a one-click way to carry
+      // the conversation over when one existed. (Same-tree switches never get here — the
+      // host keeps the conversation alive for those.)
+      const prevSessionId = state.sessionId, prevCwd = state.cwd;
+      if (data.hadConversation && prevSessionId)
+        banner("info", "Solution changed — started a new conversation in this workspace.", [
+          ["Bring conversation here", () => post({ cmd: "adoptSession", sessionId: prevSessionId, fromCwd: prevCwd, prefs: sessionPrefsFor(prevSessionId) })],
+        ]);
+      else if (data.hadConversation)
         banner("info", "Solution changed — started a new conversation in this workspace. The previous chat remains in the old workspace's history.");
       post({ cmd: "newSession", prefs: lsGet("vsclaude.lastPrefs", null) });
       break;
+    }
     case "sessionTitle":
       // The CLI's AI-generated summary replaces the first-words placeholder;
       // a manual rename always wins.
@@ -1386,6 +1402,16 @@ function applyState(s) {
   const cwdEl = $("cwd");
   cwdEl.textContent = shortPath(state.cwd);
   cwdEl.title = state.cwd + (s.exePath ? "\nCLI: " + s.exePath : "");
+  state.remote = s.remote || "off";
+  const rbtn = $("btn-remote");
+  if (rbtn) {
+    rbtn.className = "icon-btn remote-" + state.remote;
+    rbtn.title = state.remote === "on"
+      ? "Remote sharing is ON — this conversation is live at claude.ai/code and in the Claude app. Click to stop."
+      : state.remote === "connecting"
+        ? "Connecting to claude.ai…"
+        : "Share this conversation to claude.ai (continue from web, app, or phone)";
+  }
 }
 function shortPath(p) {
   const parts = (p || "").replace(/\\/g, "/").split("/").filter(Boolean);
@@ -1763,26 +1789,49 @@ function relTime(iso) {
 }
 function renderSessions() {
   const q = ($("sessions-search").value || "").toLowerCase();
-  const list = state.sessions.filter(s => !q || (s.title || "").toLowerCase().includes(q));
+  const matches = s => !q || (s.title || "").toLowerCase().includes(q);
+  const local = state.sessions.filter(s => !s.foreign && matches(s));
+  const foreign = state.sessions.filter(s => s.foreign && matches(s));
   sessionsList.innerHTML = "";
-  if (!list.length) {
+  if (!local.length && !foreign.length) {
     const empty = document.createElement("div");
     empty.className = "session-item";
     empty.textContent = q ? "No matches." : "No previous conversations in this workspace.";
     sessionsList.appendChild(empty);
   }
-  for (const s of list) {
+  const addRow = (s, isForeign) => {
     const item = document.createElement("div");
-    item.className = "session-item";
+    item.className = "session-item" + (isForeign ? " foreign" : "");
     item.innerHTML = '<div class="title">' + escapeHtml(s.title || s.sessionId) + "</div>" +
       '<div class="meta"><span>' + escapeHtml(relTime(s.lastModified)) + "</span>" +
-      (s.gitBranch ? '<span class="branch">⎇ ' + escapeHtml(s.gitBranch) + "</span>" : "") + "</div>";
+      (s.gitBranch ? '<span class="branch">⎇ ' + escapeHtml(s.gitBranch) + "</span>" : "") +
+      (isForeign && s.workspace ? '<span class="workspace" title="Stored under this folder — click to bring it into the current workspace">' + escapeHtml(s.workspace) + "</span>" : "") +
+      "</div>";
     item.addEventListener("click", () => {
       sessionsPanel.classList.add("hidden");
       state.pendingResumeTitle = s.title && s.title !== s.sessionId ? s.title.slice(0, 48) : null;
-      post({ cmd: "resume", sessionId: s.sessionId, prefs: sessionPrefsFor(s.sessionId) });
+      if (isForeign)
+        post({ cmd: "adoptSession", sessionId: s.sessionId, filePath: s.filePath, prefs: sessionPrefsFor(s.sessionId) });
+      else
+        post({ cmd: "resume", sessionId: s.sessionId, prefs: sessionPrefsFor(s.sessionId) });
     });
     sessionsList.appendChild(item);
+  };
+  for (const s of local) addRow(s, false);
+  if (foreign.length) {
+    // Conversations filed under other folders' keys (workspace switches strand them
+    // there). Collapsed by default; searching reveals matches automatically.
+    const toggle = document.createElement("div");
+    toggle.className = "session-item foreign-toggle";
+    toggle.innerHTML = '<div class="title">' + (state.showForeignSessions || q ? "▾" : "▸") +
+      " From other folders (" + foreign.length + ")</div>";
+    toggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.showForeignSessions = !state.showForeignSessions;
+      renderSessions();
+    });
+    sessionsList.appendChild(toggle);
+    if (state.showForeignSessions || q) for (const s of foreign) addRow(s, true);
   }
 }
 $("sessions-search").addEventListener("input", renderSessions);
@@ -1797,7 +1846,27 @@ function insertAtCursor(text) {
 function autoGrow() {
   inputEl.style.height = "auto";
   inputEl.style.height = Math.min(inputEl.scrollHeight, window.innerHeight * 0.38) + "px";
+  renderInputHighlight();
 }
+
+/* Paints pills behind @path and @path#Lstart-end mentions via the #input-hl backdrop.
+   Purely visual — the textarea's plain text is what gets sent. */
+const inputHlEl = $("input-hl");
+function renderInputHighlight() {
+  if (!inputHlEl) return;
+  const t = inputEl.value;
+  if (t.indexOf("@") < 0) { inputHlEl.innerHTML = ""; return; }
+  const re = /@[A-Za-z0-9_./\\-]+(?:#L\d+(?:-\d+)?)?/g;
+  let html = "", last = 0, m;
+  while ((m = re.exec(t))) {
+    html += escapeHtml(t.slice(last, m.index)) + '<mark class="mention">' + escapeHtml(m[0]) + "</mark>";
+    last = m.index + m[0].length;
+  }
+  // Trailing newline keeps the backdrop's last line box in step with the textarea's.
+  inputHlEl.innerHTML = html + escapeHtml(t.slice(last)) + "\n";
+  inputHlEl.scrollTop = inputEl.scrollTop;
+}
+inputEl.addEventListener("scroll", () => { inputHlEl.scrollTop = inputEl.scrollTop; });
 inputEl.addEventListener("input", () => { autoGrow(); maybeSuggest(); });
 
 function send() {
@@ -2069,6 +2138,7 @@ function acceptSuggest() {
 /* ---------- top bar ---------- */
 $("btn-new").addEventListener("click", () =>
   post({ cmd: "newSession", prefs: lsGet("vsclaude.lastPrefs", null) }));
+$("btn-remote").addEventListener("click", () => post({ cmd: "remoteToggle" }));
 $("btn-sessions").addEventListener("click", () => {
   sessionsPanel.classList.toggle("hidden");
   if (!sessionsPanel.classList.contains("hidden")) {

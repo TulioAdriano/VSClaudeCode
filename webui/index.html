@@ -17,6 +17,9 @@
         <span id="mock-badge" class="badge hidden">MOCK</span>
       </div>
       <div class="right">
+        <button id="btn-remote" class="icon-btn" title="Remote sharing: continue this conversation from claude.ai, the Claude app, or your phone">
+          <svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M3.05 3.05a.75.75 0 0 1 0 1.06 5.5 5.5 0 0 0 0 7.78.75.75 0 1 1-1.06 1.06 7 7 0 0 1 0-9.9.75.75 0 0 1 1.06 0zm9.9 0a7 7 0 0 1 0 9.9.75.75 0 1 1-1.06-1.06 5.5 5.5 0 0 0 0-7.78.75.75 0 0 1 1.06-1.06zM5.17 5.17a.75.75 0 0 1 0 1.06 2.5 2.5 0 0 0 0 3.54.75.75 0 0 1-1.06 1.06 4 4 0 0 1 0-5.66.75.75 0 0 1 1.06 0zm5.66 0a4 4 0 0 1 0 5.66.75.75 0 1 1-1.06-1.06 2.5 2.5 0 0 0 0-3.54.75.75 0 0 1 1.06-1.06zM8 6.75A1.25 1.25 0 1 1 6.75 8 1.25 1.25 0 0 1 8 6.75z"/></svg>
+        </button>
         <button id="btn-sessions" class="icon-btn" title="Past conversations (history)">
           <svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M8 1.5A6.5 6.5 0 1 0 14.5 8 6.5 6.5 0 0 0 8 1.5zM8 13A5 5 0 1 1 13 8 5 5 0 0 1 8 13zm.75-8.25v3.04l2.4 1.44-.6 1.02L7.25 8.5V4.75z"/></svg>
         </button>
@@ -75,8 +78,11 @@
       <div id="attachments"></div>
       <div id="suggest-pop" class="hidden"></div>
       <div id="composer">
-        <textarea id="input" rows="1"
-          placeholder="Ask Claude anything… (@ files, / commands)"></textarea>
+        <div id="input-wrap">
+          <div id="input-hl" aria-hidden="true"></div>
+          <textarea id="input" rows="1"
+            placeholder="Ask Claude anything… (@ files, # symbols, / commands)"></textarea>
+        </div>
         <button id="btn-send" title="Send (Enter)">
           <svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M1.72 1.68a.75.75 0 0 1 .79-.1l12 5.75a.75.75 0 0 1 0 1.34l-12 5.75a.75.75 0 0 1-1.05-.87L3.1 8 1.46 2.45a.75.75 0 0 1 .26-.77zM4.4 8.75l-1.05 3.57L12.06 8 3.35 3.68 4.4 7.25H9a.75.75 0 0 1 0 1.5z"/></svg>
         </button>

@@ -106,6 +106,8 @@ function readSessionInfo(file, stat) {
     title: null,
     firstPrompt: null,
     gitBranch: null,
+    cwd: null,
+    filePath: file,
   };
   // Scan up to the first 100 lines for the first real user prompt and metadata.
   let lines;
@@ -118,6 +120,7 @@ function readSessionInfo(file, stat) {
     try { obj = JSON.parse(line); } catch { continue; }
 
     if (info.gitBranch == null && obj.gitBranch) info.gitBranch = obj.gitBranch;
+    if (info.cwd == null && obj.cwd) info.cwd = obj.cwd;
     if (obj.type === "summary" && info.title == null) info.title = obj.summary || null;
 
     if (info.firstPrompt == null && obj.type === "user") {
@@ -163,6 +166,66 @@ function listSessions(cwd, maxSessions = 50) {
     } catch { /* unreadable session file */ }
   }
   return sessions;
+}
+
+/** Sessions stored under OTHER workspaces' project directories, newest first —
+ *  powers the picker's "From other folders" group (VSClaude parity, 0.3.16). */
+function listForeignSessions(currentCwd, maxSessions = 30) {
+  const own = new Set(getProjectDirectoryCandidates(currentCwd).map((d) => d.toLowerCase()));
+  const root = path.join(getConfigDirectory(), "projects");
+  const files = [];
+  let dirs;
+  try { dirs = fs.readdirSync(root); } catch { return []; }
+  for (const d of dirs) {
+    const dir = path.join(root, d);
+    if (own.has(dir.toLowerCase())) continue;
+    let names;
+    try { names = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl")); } catch { continue; }
+    for (const f of names) {
+      const full = path.join(dir, f);
+      try { files.push({ full, stat: fs.statSync(full) }); } catch { }
+    }
+  }
+  files.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+  const sessions = [];
+  for (const { full, stat } of files.slice(0, maxSessions)) {
+    try {
+      const info = readSessionInfo(full, stat);
+      if (info) sessions.push(info);
+    } catch { }
+  }
+  return sessions;
+}
+
+/** Copies a session file into toCwd's project directory so the CLI can resume it
+ *  there (adoption). Overwrites only when the source is newer; returns the target
+ *  path, or null when nothing could be copied. */
+function adoptSession(sourceJsonlPath, toCwd) {
+  try {
+    if (!fs.existsSync(sourceJsonlPath)) return null;
+    const candidates = getProjectDirectoryCandidates(toCwd);
+    const targetDir = candidates.length > 0
+      ? candidates[0]
+      : path.join(getConfigDirectory(), "projects", sanitizeProjectPath(toCwd));
+    fs.mkdirSync(targetDir, { recursive: true });
+    const target = path.join(targetDir, path.basename(sourceJsonlPath));
+    if (target.toLowerCase() === sourceJsonlPath.toLowerCase()) return target; // already home
+    if (!fs.existsSync(target) || fs.statSync(sourceJsonlPath).mtimeMs > fs.statSync(target).mtimeMs)
+      fs.copyFileSync(sourceJsonlPath, target);
+    return target;
+  } catch {
+    return null;
+  }
+}
+
+/** True when two workspace roots are the same tree (equal, or one inside the other). */
+function isSameWorkspaceFamily(a, b) {
+  if (!a || !b) return false;
+  const norm = (p) => path.resolve(p).replace(/[\\/]+$/, "").toLowerCase();
+  const na = norm(a), nb = norm(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  return na.startsWith(nb + path.sep) || nb.startsWith(na + path.sep);
 }
 
 /** Custom title (file tail) first, else the CLI's generated summary near the head. */
@@ -227,6 +290,9 @@ module.exports = {
   sanitizeProjectPathLegacy,
   getProjectDirectoryCandidates,
   listSessions,
+  listForeignSessions,
+  adoptSession,
+  isSameWorkspaceFamily,
   getStoredSessionTitle,
   readTranscriptAll,
 };

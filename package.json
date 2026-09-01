@@ -2,7 +2,7 @@
   "name": "vsclaudecode",
   "displayName": "VSClaude Code",
   "description": "Unofficial Claude Code chat panel for VS Code - the VSClaude experience (per-message model attribution, model management, usage limits, auth recovery) powered by your installed Claude Code CLI. Not affiliated with Anthropic's official extension.",
-  "version": "0.1.2",
+  "version": "0.4.0",
   "publisher": "TulioAdriano",
   "private": true,
   "license": "UNLICENSED",
@@ -94,6 +94,16 @@
           "type": "boolean",
           "default": true,
           "description": "Run `claude update` in the background once per window so the CLI and its model catalog stay current."
+        },
+        "vsclaudecode.showForeignSessions": {
+          "type": "boolean",
+          "default": false,
+          "description": "List conversations stored under other workspaces' history in a collapsed \"From other folders\" group in the session picker. Clicking one brings it into the current workspace."
+        },
+        "vsclaudecode.enableRemoteSharing": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically connect every new conversation to claude.ai Remote Control (continue from web, the Claude app, or your phone). Requires a signed-in Claude CLI. The antenna button toggles sharing per conversation."
         },
         "vsclaudecode.logProtocol": {
           "type": "boolean",

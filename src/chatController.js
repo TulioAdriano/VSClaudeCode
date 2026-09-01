@@ -12,6 +12,7 @@ const { ClaudeCliSession, resolveExecutable } = require("./cliSession");
 const sessionStore = require("./sessionStore");
 const titleGenerator = require("./titleGenerator");
 const { IdeMcpServer, createVsCodeIdeHost } = require("./ideMcpServer");
+const { startRemoteBridge } = require("./remoteBridge");
 
 const HISTORY_PAGE_SIZE = 400;
 let cliUpdateChecked = false; // once per VS Code window
@@ -29,6 +30,10 @@ class ChatController {
     this._cwd = "";
     this._titleResolved = false;
     this._titleFetchRunning = false;
+    this._titleAttempts = 0;
+    this._bridge = null;
+    this._remoteState = "off"; // off | connecting | on
+    this._remoteCseId = null;
     this._resumedFromHistory = false;
     this._firstUserPromptText = null;
     this._hadUserMessage = false;
@@ -120,6 +125,33 @@ class ChatController {
         case "resume":
           await this.startSession(msg.sessionId, msg.prefs || null);
           break;
+        case "adoptSession": {
+          // Bring a session stored under another workspace's key into this one, then resume.
+          const adoptId = msg.sessionId || "";
+          let sourcePath = msg.filePath || null;
+          if (!sourcePath && msg.fromCwd) {
+            for (const dir of sessionStore.getProjectDirectoryCandidates(msg.fromCwd)) {
+              const cand = path.join(dir, adoptId + ".jsonl");
+              if (fs.existsSync(cand)) { sourcePath = cand; break; }
+            }
+          }
+          if (!sourcePath || !adoptId) {
+            this.pushBanner("error", "Could not find that conversation's file to bring here.");
+            break;
+          }
+          const adopted = sessionStore.adoptSession(sourcePath, this._resolveCwd());
+          if (!adopted) {
+            this.pushBanner("error", "Could not copy the conversation into this workspace.");
+            break;
+          }
+          this._log("Adopted session " + adoptId + ": '" + sourcePath + "' -> '" + adopted + "'");
+          await this.startSession(adoptId, msg.prefs || null);
+          break;
+        }
+        case "remoteToggle":
+          if (this._bridge) this._stopRemote("Remote sharing stopped.");
+          else this._startRemote();
+          break;
         case "listSessions":
           this.pushSessions();
           break;
@@ -190,9 +222,11 @@ class ChatController {
     const old = this._session;
     this._session = null;
     if (old) old.dispose();
+    this._stopRemote(null); // a bridge session mirrors ONE conversation
     this._pendingPermissions.clear();
     this._titleResolved = false;
     this._titleFetchRunning = false;
+    this._titleAttempts = 0;
     this._resumedFromHistory = !!resumeSessionId;
     this._firstUserPromptText = null;
     this._hadUserMessage = false;
@@ -291,6 +325,9 @@ class ChatController {
       this._sdkIdeActive = true;
       this._post({ kind: "init", data: init });
       this._fetchUsage(true);
+      if (this._config().get("enableRemoteSharing") === true ||
+          process.env.VSCLAUDE_REMOTE_AUTOSTART === "1")
+        this._startRemote();
       // Ultracode is a session flag, not a spawn arg — apply it after initialize.
       if (this._effort === "ultracode") {
         try { await session.applyFlagSettings({ ultracode: true }); }
@@ -333,6 +370,19 @@ class ChatController {
   _onClaudeMessage(msg) {
     if (this._config().get("logProtocol")) this._log("[claude] " + JSON.stringify(msg));
     this._post({ kind: "claude", msg });
+
+    // Mirror the session's output to claude.ai when remote sharing is on. type:"user"
+    // here is always a CLI-emitted tool_result envelope (real prompts are mirrored at
+    // send time; remote-originated ones skipped there).
+    const bridge = this._bridge;
+    if (bridge && (msg.type === "assistant" || msg.type === "stream_event" ||
+                   msg.type === "user" || msg.type === "result")) {
+      bridge.write(msg);
+      if (msg.type === "result") {
+        bridge.sendResult();
+        bridge.reportState("idle");
+      }
+    }
 
     if (msg.type === "system" && msg.subtype === "init") {
       // The CLI reports its own project storage dir (memory_paths.auto ends in /memory/) —
@@ -383,8 +433,21 @@ class ChatController {
         if (this._resumedFromHistory) return;
         const prompt = this._firstUserPromptText;
         if (!prompt || !prompt.trim()) return;
+        if (this._titleAttempts >= 3) return; // repeated failures — stop burning haiku calls
+        this._titleAttempts++;
         const generated = await titleGenerator.generate(this._effectiveExePath || this._resolveExe(), prompt);
-        if (!generated) return;
+        if (!generated) {
+          this._log("title generation failed (attempt " + this._titleAttempts + ")");
+          // Retries happen after later turns; for one-prompt sessions, one delayed
+          // re-attempt covers transient failures or a sign-in completed meanwhile.
+          if (this._titleAttempts < 3) {
+            setTimeout(() => {
+              if (!this._titleResolved && this._session === session && session.isRunning)
+                this._fetchGeneratedTitle();
+            }, 90000);
+          }
+          return;
+        }
         if (this._titleResolved || this._session !== session || !session.isRunning) return;
 
         this._titleResolved = true;
@@ -411,7 +474,16 @@ class ChatController {
 
   _handlePermissionRequest(requestId, request, signal) {
     return new Promise((resolve) => {
-      this._pendingPermissions.set(requestId, resolve);
+      // Whoever answers (panel card or claude.ai), retract the prompt on the other surface.
+      const settle = (decision) => {
+        this._post({ kind: "permissionCancel", requestId });
+        if (this._bridge) {
+          this._bridge.sendControlCancelRequest(requestId);
+          this._bridge.reportState("running");
+        }
+        resolve(decision);
+      };
+      this._pendingPermissions.set(requestId, settle);
 
       const toolName = request.tool_name || "";
       const input = request.input || {};
@@ -419,12 +491,14 @@ class ChatController {
       if (hints) request._vsclaude_line_hints = hints;
 
       this._post({ kind: "permission", requestId, request });
+      if (this._bridge) {
+        this._bridge.sendControlRequest({ type: "control_request", request_id: requestId, request });
+        this._bridge.reportState("requires_action");
+      }
 
       signal.addEventListener("abort", () => {
-        if (this._pendingPermissions.delete(requestId)) {
-          resolve({ behavior: "deny", message: "Request cancelled" });
-          this._post({ kind: "permissionCancel", requestId });
-        }
+        if (this._pendingPermissions.delete(requestId))
+          settle({ behavior: "deny", message: "Request cancelled" });
       });
     });
   }
@@ -495,26 +569,33 @@ class ChatController {
   // ---- user messages ---------------------------------------------------
 
   async _sendUserMessage(msg) {
+    const blocks = Array.isArray(msg.blocks) && msg.blocks.length > 0
+      ? msg.blocks
+      : [{ type: "text", text: msg.text || "" }];
+    await this._sendBlocks(blocks, false);
+  }
+
+  /** fromRemote marks messages that arrived from claude.ai via the bridge — those are
+   *  not mirrored back up (the remote side has them) and skip selection context. */
+  async _sendBlocks(blocks, fromRemote) {
     if (!this._session || !this._session.isRunning) {
       await this.startSession(null, null);
       if (!this._session) return;
     }
 
-    const blocks = Array.isArray(msg.blocks) && msg.blocks.length > 0
-      ? msg.blocks
-      : [{ type: "text", text: msg.text || "" }];
-
     if (this._firstUserPromptText == null) {
-      let text = msg.text;
-      if (!text || !text.trim()) {
-        const block = blocks.find((b) => b && b.type === "text" && b.text && b.text.trim());
-        text = block ? block.text : null;
-      }
+      const block = blocks.find((b) => b && b.type === "text" && b.text && b.text.trim());
+      const text = block ? block.text : null;
       if (text && text.trim()) this._firstUserPromptText = text;
     }
 
-    const contextBlock = this._buildSelectionContextBlock();
-    if (contextBlock) blocks.unshift(contextBlock);
+    if (!fromRemote) {
+      const contextBlock = this._buildSelectionContextBlock();
+      if (contextBlock) blocks.unshift(contextBlock);
+      if (this._bridge)
+        this._bridge.write({ type: "user", message: { role: "user", content: blocks } });
+    }
+    if (this._bridge) this._bridge.reportState("running");
 
     this._hadUserMessage = true;
     await this._session.sendUserMessage(blocks);
@@ -661,6 +742,13 @@ class ChatController {
     this._workspaceTimer = setTimeout(() => {
       const newCwd = this._resolveCwd();
       if (newCwd.toLowerCase() === (this._cwd || "").toLowerCase()) return;
+      if (sessionStore.isSameWorkspaceFamily(newCwd, this._cwd)) {
+        // Same tree (e.g. a folder added under the root): keep the conversation.
+        this._log("Workspace changed within the same tree: '" + this._cwd + "' -> '" + newCwd + "' — keeping the conversation");
+        if (this._hadUserMessage)
+          this.pushBanner("info", "Workspace changed within the same folder — your conversation continues.");
+        return;
+      }
       this._log("Workspace changed: '" + this._cwd + "' -> '" + newCwd + "'");
       this._post({ kind: "workspaceChanged", cwd: newCwd, hadConversation: this._hadUserMessage });
     }, 1500);
@@ -685,8 +773,123 @@ class ChatController {
         exePath,
         mock: exePath.toLowerCase().includes("mockclaude"),
         showPreviousModels: this._config().get("showPreviousModels") !== false,
+        remote: this._remoteState,
+        remoteCseId: this._remoteCseId,
       },
     });
+  }
+
+  // ---- Remote Control (claude.ai bridge) -------------------------------
+
+  _setRemoteState(state) {
+    this._remoteState = state;
+    this.pushState();
+  }
+
+  _startRemote() {
+    if (this._bridge) return;
+    this._setRemoteState("connecting");
+    let branch = null;
+    try {
+      const head = fs.readFileSync(path.join(this._cwd, ".git", "HEAD"), "utf8").trim();
+      if (head.startsWith("ref: refs/heads/")) branch = head.slice("ref: refs/heads/".length);
+    } catch { }
+    const title = this._firstUserPromptText
+      ? this._firstUserPromptText.slice(0, 60)
+      : "VS Code — " + path.basename(this._cwd);
+    startRemoteBridge(
+      { title, cwd: this._cwd, model: this._model, gitBranch: branch },
+      {
+        status: (t) => this._log("[bridge] " + t),
+        registered: (cseId) => {
+          this._remoteCseId = cseId;
+          this._setRemoteState("on");
+          this.pushBanner("info", "Remote sharing is on — continue this conversation at claude.ai/code, in the Claude app, or on your phone.");
+          this._log("[bridge] registered " + cseId);
+        },
+        inbound: (msg) => {
+          const blocks = msg && msg.message && msg.message.content;
+          if (!Array.isArray(blocks) || blocks.length === 0) return;
+          const display = JSON.parse(JSON.stringify(msg));
+          display._vsclaudeRemote = true;
+          this._post({ kind: "claude", msg: display });
+          this._sendBlocks(blocks, true)
+            .catch((e) => this.pushBanner("error", "Remote message failed: " + e.message));
+        },
+        permissionResponse: (res) => {
+          const resp = res && res.response;
+          const requestId = resp && resp.request_id;
+          const inner = resp && resp.response;
+          if (!requestId || !inner) return;
+          const settle = this._pendingPermissions.get(requestId);
+          if (settle) {
+            this._pendingPermissions.delete(requestId);
+            settle(inner.behavior === "allow"
+              ? { behavior: "allow", updatedInput: inner.updatedInput || {} }
+              : { behavior: "deny", message: inner.message || "Denied from claude.ai" });
+            this._log("[bridge] permission " + requestId + " answered remotely: " + inner.behavior);
+          }
+        },
+        interrupt: () => { if (this._session) this._session.interrupt().catch(() => { }); },
+        setModel: async (model) => {
+          try {
+            if (this._session) await this._session.setModel(model || null);
+            this._model = model;
+            this._post({ kind: "modelSet", model });
+            this.pushState();
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e.message };
+          }
+        },
+        setPermissionMode: (mode) => {
+          (async () => {
+            try {
+              if (this._session) await this._session.setPermissionMode(mode);
+              this._permissionMode = mode;
+              this.pushState();
+            } catch { }
+          })();
+        },
+        renameSession: (title2) => {
+          const t = (title2 || "").trim();
+          if (!t) return;
+          this._titleResolved = true;
+          this._post({ kind: "sessionTitle", title: t });
+          if (this._session) this._session.renameSession(t).catch(() => { });
+        },
+        closed: (code) => {
+          if (!this._bridge) return;
+          this._bridge = null;
+          this._remoteCseId = null;
+          this._setRemoteState("off");
+          this.pushBanner("warning", "Remote sharing disconnected (code " + code + "). Click the antenna to reconnect.");
+        },
+        error: (stage, message) => {
+          this._bridge = null;
+          this._remoteCseId = null;
+          this._setRemoteState("off");
+          this.pushBanner("error", "Remote sharing: " + message);
+        },
+      }
+    ).then((handle) => {
+      if (handle) this._bridge = handle;
+      else if (this._remoteState === "connecting") this._setRemoteState("off");
+    }).catch((e) => {
+      this._setRemoteState("off");
+      this.pushBanner("error", "Remote sharing failed to start: " + e.message);
+    });
+  }
+
+  _stopRemote(notice) {
+    const bridge = this._bridge;
+    this._bridge = null;
+    this._remoteCseId = null;
+    if (bridge) { try { bridge.stop(); } catch { } }
+    if (this._remoteState !== "off") {
+      this._setRemoteState("off");
+      if (notice) this.pushBanner("info", notice);
+    }
   }
 
   pushSessions() {
@@ -704,6 +907,27 @@ class ChatController {
           gitBranch: s.gitBranch,
           sizeBytes: s.fileSizeBytes,
         });
+      }
+      // Sessions filed under other workspaces' keys (collapsed "From other folders"
+      // group; clicking one adopts it here). Off by default; env hook for the smoke.
+      const showForeign = this._config().get("showForeignSessions") === true ||
+        process.env.VSCLAUDE_FOREIGN_SESSIONS === "1";
+      if (showForeign) {
+        const localIds = new Set(sessions.map((s) => s.sessionId.toLowerCase()));
+        for (const s of sessionStore.listForeignSessions(cwd, 30)) {
+          if (localIds.has(s.sessionId.toLowerCase())) continue; // adopted → local copy is live
+          if (!s.customTitle && !s.title && !s.firstPrompt) continue;
+          list.push({
+            sessionId: s.sessionId,
+            title: s.displayTitle,
+            lastModified: s.lastModifiedUtc.toISOString(),
+            gitBranch: s.gitBranch,
+            sizeBytes: s.fileSizeBytes,
+            foreign: true,
+            workspace: s.cwd,
+            filePath: s.filePath,
+          });
+        }
       }
       this._post({ kind: "sessions", list });
     } catch (e) {
@@ -797,6 +1021,7 @@ class ChatController {
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
+    this._stopRemote(null);
     clearInterval(this._authPollTimer);
     clearTimeout(this._workspaceTimer);
     for (const d of this._disposables) { try { d.dispose(); } catch { } }

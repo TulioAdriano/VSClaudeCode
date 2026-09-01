@@ -433,6 +433,18 @@ kbd {
 .session-item .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
 .session-item .meta { color: var(--faint); font-size: 11px; display: flex; gap: 8px; margin-top: 1px; }
 .session-item .branch { color: var(--muted); }
+.session-item .workspace {
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 60%; direction: rtl; text-align: left; /* keep the path's tail visible */
+}
+.session-item.foreign-toggle { color: var(--muted); user-select: none; }
+
+/* remote sharing (claude.ai bridge) */
+#btn-remote.remote-on { color: var(--accent); }
+#btn-remote.remote-connecting { color: var(--warn, #d29922); animation: remote-pulse 1.2s ease-in-out infinite; }
+@keyframes remote-pulse { 50% { opacity: 0.35; } }
+.msg.user.remote { border-left: 2px solid var(--accent); }
+.msg.user .remote-tag { color: var(--faint); font-size: 10.5px; margin-bottom: 2px; }
 
 /* ---------- composer ---------- */
 #composer-area {
@@ -457,13 +469,28 @@ kbd {
   transition: border-color .12s;
 }
 #composer:focus-within { border-color: var(--accent); }
+#input-wrap { flex: 1; position: relative; min-width: 0; }
 #input {
-  flex: 1; resize: none; background: transparent; color: var(--fg);
+  display: block; width: 100%; resize: none; background: transparent; color: var(--fg);
   border: 0; padding: 4px 0;
   font-family: inherit; font-size: 13px; line-height: 1.5;
   max-height: 38vh; outline: none;
+  position: relative; z-index: 1;
 }
 #input::placeholder { color: var(--faint); }
+/* Backdrop that paints highlight pills behind @-mentions in the textarea. Text is
+   transparent (the textarea renders the glyphs); metrics must match #input exactly. */
+#input-hl {
+  position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none;
+  color: transparent; white-space: pre-wrap; overflow-wrap: break-word;
+  border: 0; padding: 4px 0;
+  font-family: inherit; font-size: 13px; line-height: 1.5;
+}
+#input-hl mark.mention {
+  color: transparent;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 4px;
+}
 #btn-send, #btn-stop {
   height: 30px; width: 34px; flex: 0 0 auto; border-radius: 8px; padding: 0;
   display: inline-flex; align-items: center; justify-content: center;
