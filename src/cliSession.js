@@ -55,6 +55,7 @@ function buildArguments(options) {
   if (options.registerSdkIdeServer)
     args.push("--mcp-config", '{"mcpServers":{"ide":{"type":"sdk","name":"ide"}}}');
   if (options.promptSuggestions) args.push("--prompt-suggestions");
+  if (options.forwardSubagentText) args.push("--forward-subagent-text");
   args.push(...(options.extraArguments || []));
   return args;
 }

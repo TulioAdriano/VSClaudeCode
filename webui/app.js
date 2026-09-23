@@ -14,6 +14,7 @@ const APP_TITLE = document.title || "Claude Code";
 const state = {
   running: false, working: false, mode: "default", model: "",
   sessionId: null, cwd: "", ideConnections: 0, mock: false,
+  agents: new Map(), account: null,
   attachments: [], commands: [], models: [], toolCards: new Map(),
   liveMessage: null, liveBlocks: [], suggestToken: 0, suggestItems: [], suggestActive: 0,
   suggestKind: null, suggestAnchor: 0, autoScroll: true, initData: null,
@@ -518,7 +519,114 @@ function displayToolName(name) {
   return name;
 }
 
+/* ---------- agent map (sub-agent visualization) ---------- */
+
+function registerAgent(taskId, input) {
+  if (state.agents.has(taskId)) return;
+  state.agents.set(taskId, {
+    id: taskId,
+    desc: input.description || input.subagent_type || "sub-agent",
+    type: input.subagent_type || "",
+    state: "running",
+    started: Date.now(),
+    ended: null,
+  });
+  updateAgentPill();
+}
+
+function resolveAgent(taskId, isError) {
+  const a = state.agents.get(taskId);
+  if (!a || a.state !== "running") return;
+  a.state = isError ? "failed" : "completed";
+  a.ended = Date.now();
+  updateAgentPill();
+  if (!$("agent-map").classList.contains("hidden")) renderAgentMap();
+}
+
+function stopRunningAgents() {
+  let changed = false;
+  for (const a of state.agents.values())
+    if (a.state === "running") { a.state = "stopped"; a.ended = Date.now(); changed = true; }
+  if (changed) updateAgentPill();
+}
+
+function updateAgentPill() {
+  const pill = $("agent-pill");
+  if (!pill) return;
+  const all = [...state.agents.values()];
+  if (!all.length) { pill.classList.add("hidden"); return; }
+  const running = all.filter(a => a.state === "running").length;
+  const failed = all.some(a => a.state === "failed");
+  pill.textContent = (running > 0 ? running : all.length) + (all.length === 1 ? " agent" : " agents");
+  pill.className = "pill agent-pill" + (running > 0 ? " running" : "") + (failed ? " err" : "");
+  pill.title = running > 0
+    ? running + " sub-agent" + (running === 1 ? "" : "s") + " running — click for the agent map"
+    : "Sub-agents this session — click for the agent map";
+}
+
+const AGENT_STATE_ICON = { running: "⏳", completed: "✓", failed: "✕", stopped: "⏹" };
+
+function renderAgentMap() {
+  const listEl = $("agent-map-list");
+  listEl.innerHTML = "";
+  // Running first, then by end time (newest first) — the official map's ordering.
+  const agents = [...state.agents.values()].sort((a, b) =>
+    (a.state === "running" ? 0 : 1) - (b.state === "running" ? 0 : 1) || (b.ended || 0) - (a.ended || 0));
+  if (!agents.length) {
+    const empty = document.createElement("div");
+    empty.className = "agent-card";
+    empty.textContent = "No sub-agents in this conversation yet.";
+    listEl.appendChild(empty);
+    return;
+  }
+  for (const a of agents) {
+    const card = document.createElement("div");
+    card.className = "agent-card " + a.state;
+    const secs = a.ended ? Math.max(1, Math.round((a.ended - a.started) / 1000)) + "s" : "running…";
+    card.innerHTML =
+      '<div class="agent-head"><span class="agent-state">' + AGENT_STATE_ICON[a.state] + "</span>" +
+      '<span class="agent-desc">' + escapeHtml(a.desc) + "</span>" +
+      '<span class="agent-meta">' + escapeHtml(a.type ? a.type + " · " : "") + secs + "</span></div>";
+    card.title = "Click for this agent's transcript";
+    card.addEventListener("click", () => showAgentTranscript(a));
+    listEl.appendChild(card);
+  }
+}
+
+/* Read-only transcript: a clone of the agent's tool card (its .tool-sub holds the
+   forwarded child messages), shown inside the map panel. */
+function showAgentTranscript(agent) {
+  const body = $("agent-transcript");
+  body.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "agent-transcript-title";
+  title.textContent = AGENT_STATE_ICON[agent.state] + " " + agent.desc;
+  body.appendChild(title);
+  const card = state.toolCards.get(agent.id);
+  if (card) {
+    const clone = card.cloneNode(true);
+    clone.querySelectorAll("button").forEach(b => b.remove());
+    clone.classList.add("agent-transcript-card");
+    body.appendChild(clone);
+  } else {
+    const none = document.createElement("div");
+    none.textContent = "No transcript captured for this agent.";
+    body.appendChild(none);
+  }
+  $("agent-map-list").classList.add("hidden");
+  $("btn-agent-back").classList.remove("hidden");
+  body.classList.remove("hidden");
+}
+
+function showAgentList() {
+  $("agent-transcript").classList.add("hidden");
+  $("btn-agent-back").classList.add("hidden");
+  $("agent-map-list").classList.remove("hidden");
+  renderAgentMap();
+}
+
 function attachToolResult(toolUseId, content, isError, toolUseResult) {
+  resolveAgent(toolUseId, isError);
   const card = state.toolCards.get(toolUseId);
   if (!card) return;
   const status = card.querySelector(".tool-status");
@@ -647,6 +755,7 @@ function handleAssistantMessage(m) {
         }
       }
     } else if (block.type === "tool_use") {
+      if (block.name === "Task") registerAgent(block.id, block.input || {});
       if (!state.toolCards.has(block.id))
         newToolCard(container, block.id, block.name, block.input || {});
       else {
@@ -666,6 +775,7 @@ function handleAssistantMessage(m) {
   finishLiveMessage();
   if (!m.parent_tool_use_id) state.lastStreamContainer = null;
   highlightIn(container);
+  if (m.parent_tool_use_id) container.scrollTop = container.scrollHeight; // live progress stays pinned
   updateWelcome();
   scrollBottom();
 }
@@ -705,6 +815,7 @@ function handleUserMessage(m) {
 function handleResult(m) {
   setWorking(false);
   finishLiveMessage();
+  stopRunningAgents(); // a turn boundary means no sub-agent is still live
   const footer = document.createElement("div");
   footer.className = "turn-footer";
   const cost = typeof m.total_cost_usd === "number" && m.total_cost_usd > 0 ? "$" + m.total_cost_usd.toFixed(4) : "";
@@ -1083,6 +1194,12 @@ function handleHostMessage(data) {
     case "context": applyContextUsage(data.data); break;
     case "banner": banner(data.level || "info", data.text || ""); break;
     case "stderr": console.warn("[claude stderr]", data.line); break;
+    case "account":
+      state.account = { email: data.email || "", plan: data.plan || "" };
+      { const chip = $("account-chip");
+        if (chip) chip.textContent = state.account.email + (state.account.plan ? " · " + state.account.plan : ""); }
+      renderUsage();
+      break;
     case "authState":
       if (data.loggedIn) {
         $("signin-waiting").classList.add("hidden");
@@ -1104,6 +1221,9 @@ function handleHostMessage(data) {
       state.toolCards.clear(); permCards.clear(); finishLiveMessage();
       state.lastStreamContainer = null;
       state.initReceived = false;
+      state.agents = new Map();
+      updateAgentPill();
+      $("agent-map").classList.add("hidden");
       state.sessionTitle = data.resume ? (state.pendingResumeTitle || null) : null;
       state.manualTitle = false;
       state.turnModel = null; state.historyModel = null;
@@ -1279,6 +1399,7 @@ function renderUsage() {
   chip.classList.toggle("warn", worst >= 75 && worst < 90);
   chip.classList.toggle("err", worst >= 90);
   chip.title = [
+    state.account ? "Account: " + state.account.email + (state.account.plan ? " · " + state.account.plan : "") : null,
     f ? "5-hour window: " + f.pct + "% used — resets " + fmtReset(f.resets) : null,
     s ? "7-day window: " + s.pct + "% used — resets " + fmtReset(s.resets) : null,
     ...models.map(m => m.label + " weekly: " + m.pct + "% used — resets " + fmtReset(m.resets)),
@@ -1870,7 +1991,7 @@ inputEl.addEventListener("scroll", () => { inputHlEl.scrollTop = inputEl.scrollT
 inputEl.addEventListener("input", () => { autoGrow(); maybeSuggest(); });
 
 function send() {
-  const text = inputEl.value.trim();
+  const text = stripInvisibles(inputEl.value).text.trim();
   if (!text && !state.attachments.length) return;
   hideSuggest();
   const blocks = [];
@@ -1933,6 +2054,20 @@ function ensureImageType(a) {
 }
 
 document.addEventListener("paste", (e) => {
+  // Text pastes: strip invisible Unicode before it reaches the composer.
+  if (e.target === inputEl && e.clipboardData) {
+    const raw = e.clipboardData.getData("text/plain");
+    if (raw) {
+      const { text: cleaned, removed } = stripInvisibles(raw);
+      if (removed > 0) {
+        e.preventDefault();
+        insertAtCursor(cleaned);
+        maybeSuggest();
+        banner("info", "Removed " + removed + " invisible formatting character" + (removed === 1 ? "" : "s") + " from the pasted text.");
+        return;
+      }
+    }
+  }
   const items = (e.clipboardData || {}).items || [];
   for (const item of items) {
     const isImageType = item.type && item.type.startsWith("image/");
@@ -2139,6 +2274,67 @@ function acceptSuggest() {
 $("btn-new").addEventListener("click", () =>
   post({ cmd: "newSession", prefs: lsGet("vsclaude.lastPrefs", null) }));
 $("btn-remote").addEventListener("click", () => post({ cmd: "remoteToggle" }));
+$("agent-pill").addEventListener("click", () => {
+  $("agent-map").classList.remove("hidden");
+  showAgentList();
+});
+$("btn-agent-close").addEventListener("click", () => $("agent-map").classList.add("hidden"));
+$("btn-agent-back").addEventListener("click", showAgentList);
+$("btn-export").addEventListener("click", () => {
+  const text = exportConversationText();
+  if (!text) { banner("info", "Nothing to export yet."); return; }
+  navigator.clipboard.writeText(text).then(
+    () => banner("info", "Conversation copied to the clipboard as plain text."),
+    () => banner("error", "Could not write to the clipboard."));
+});
+
+/* Plain-text export of the visible conversation (official /export parity). */
+function exportConversationText() {
+  const parts = [];
+  for (const el of messagesEl.children) {
+    if (el.classList.contains("msg") && el.classList.contains("user")) {
+      const md = el.querySelector(".md");
+      parts.push("You:\n" + (md ? md.innerText.trim() : el.innerText.trim()));
+    } else if (el.classList.contains("msg") && el.classList.contains("assistant")) {
+      const texts = [...el.querySelectorAll(".text-block")].map(t => (t.dataset.src || t.innerText).trim()).filter(Boolean);
+      const tools = [...el.querySelectorAll(".tool-card")].map(c => "[Tool: " + (c.dataset.tool || "tool") + "]");
+      const body = [...tools, ...texts].join("\n");
+      if (body.trim()) parts.push("Claude:\n" + body);
+    } else if (el.classList.contains("turn-footer")) {
+      parts.push("— " + el.innerText.trim());
+    }
+  }
+  return parts.length ? parts.join("\n\n") + "\n" : "";
+}
+
+/* Copy-response button: appears on hover over an assistant message. */
+document.addEventListener("mouseover", (e) => {
+  const msg = e.target && e.target.closest ? e.target.closest(".msg.assistant") : null;
+  if (!msg || msg.querySelector(".copy-msg") || state.renderTarget) return;
+  const btn = document.createElement("button");
+  btn.className = "copy-msg icon-btn";
+  btn.title = "Copy this response as markdown";
+  btn.textContent = "⧉";
+  btn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const text = [...msg.querySelectorAll(".text-block")].map(t => t.dataset.src || t.innerText).join("\n\n").trim();
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = "✓";
+      setTimeout(() => { btn.textContent = "⧉"; }, 1200);
+    });
+  });
+  msg.appendChild(btn);
+});
+
+/* Invisible Unicode (zero-width, bidi controls, tag characters) can smuggle unseen
+   content into prompts — strip it from pastes with a notice, and from sends silently. */
+function stripInvisibles(text) {
+  if (!text) return { text, removed: 0 };
+  const re = /[­​-‏‪-‮⁠-⁤⁦-⁩﻿]|\uDB40[\uDC00-\uDC7F]/g;
+  let removed = 0;
+  const cleaned = text.replace(re, () => { removed++; return ""; });
+  return { text: cleaned, removed };
+}
 $("btn-sessions").addEventListener("click", () => {
   sessionsPanel.classList.toggle("hidden");
   if (!sessionsPanel.classList.contains("hidden")) {

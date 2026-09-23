@@ -61,10 +61,23 @@
       Latest
     </button>
 
+    <div id="agent-map" class="hidden">
+      <div class="panel-head">
+        <button id="btn-agent-back" class="icon-btn hidden" title="Back to the agent list">←</button>
+        <span>Agent map</span>
+        <button id="btn-agent-close" class="icon-btn">✕</button>
+      </div>
+      <div id="agent-map-list"></div>
+      <div id="agent-transcript" class="hidden"></div>
+    </div>
+
     <div id="sessions-panel" class="hidden">
       <div class="panel-head">
         <span>Past conversations</span>
-        <span id="account-chip"></span>
+        <span id="account-chip" title="Signed-in account"></span>
+        <button id="btn-export" class="icon-btn" title="Copy the current conversation as plain text">
+          <svg viewBox="0 0 16 16" width="13" height="13"><path fill="currentColor" d="M4 1.5h5.5L13 5v8.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1zm5 1V5h2.5zM5 7h6v1.2H5zm0 2.6h6v1.2H5z"/></svg>
+        </button>
         <button id="btn-sessions-close" class="icon-btn">✕</button>
       </div>
       <input id="sessions-search" type="text" placeholder="Search conversations…" />
@@ -111,6 +124,7 @@
           <option value="ultracode">Ultracode</option>
         </select>
         <span id="turn-stats" title="Last turn"></span>
+        <span id="agent-pill" class="pill agent-pill hidden"></span>
         <span id="usage-chip" class="hidden" title="Plan usage — click to refresh"></span>
         <span id="context-bar" title="Context window usage"><span id="context-fill"></span></span>
         <span id="cwd" title=""></span>

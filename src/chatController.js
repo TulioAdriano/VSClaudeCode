@@ -265,6 +265,7 @@ class ChatController {
       effort,
       resumeSessionId: resumeSessionId || null,
       registerSdkIdeServer: true,
+      forwardSubagentText: cfg.get("showSubagentActivity") !== false,
       environment: {},
     });
     session.permissionHandler = (requestId, request, signal) =>
@@ -325,6 +326,7 @@ class ChatController {
       this._sdkIdeActive = true;
       this._post({ kind: "init", data: init });
       this._fetchUsage(true);
+      this._fetchAccountInfo();
       if (this._config().get("enableRemoteSharing") === true ||
           process.env.VSCLAUDE_REMOTE_AUTOSTART === "1")
         this._startRemote();
@@ -997,6 +999,31 @@ class ChatController {
         }
       }).catch(() => { /* keep polling */ });
     }, 4000);
+  }
+
+  /** Pushes who is signed in (email · plan) from `claude auth status`, once per window —
+   *  shown in the usage tooltip and the sessions panel. */
+  _fetchAccountInfo() {
+    if (this._accountFetched) return;
+    this._accountFetched = true;
+    const exe = this._effectiveExePath || this._resolveExe();
+    const useShell = process.platform === "win32" && /\.cmd$/i.test(exe);
+    let proc;
+    try {
+      proc = spawn(exe, ["auth", "status"], { shell: useShell, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    } catch { return; }
+    let stdout = "";
+    proc.stdout.on("data", (d) => { stdout += d; });
+    const timer = setTimeout(() => { try { proc.kill(); } catch { } }, 10000);
+    proc.on("error", () => clearTimeout(timer));
+    proc.on("exit", () => {
+      clearTimeout(timer);
+      try {
+        const json = JSON.parse(stdout.trim());
+        if (json.loggedIn === true)
+          this._post({ kind: "account", email: json.email || "", plan: json.subscriptionType || "" });
+      } catch { /* account line stays hidden */ }
+    });
   }
 
   _checkLoggedIn(exe) {
