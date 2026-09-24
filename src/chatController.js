@@ -285,7 +285,18 @@ class ChatController {
         this._post({ kind: "exited", code });
     };
 
-    this._post({ kind: "sessionStarting", resume: resumeSessionId || null });
+    // Resumed sessions carry the file's last write so the cache clock can show
+    // warmth (or how long the session idled) before the first new turn.
+    let lastActivity = null;
+    if (resumeSessionId) {
+      try {
+        for (const dir of sessionStore.getProjectDirectoryCandidates(this._cwd)) {
+          const file = path.join(dir, resumeSessionId + ".jsonl");
+          if (fs.existsSync(file)) { lastActivity = fs.statSync(file).mtime.toISOString(); break; }
+        }
+      } catch { }
+    }
+    this._post({ kind: "sessionStarting", resume: resumeSessionId || null, lastActivity });
 
     this._transcriptCache = null;
     this._transcriptOffset = 0;

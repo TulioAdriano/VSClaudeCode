@@ -439,6 +439,10 @@ kbd {
 }
 .session-item.foreign-toggle { color: var(--muted); user-select: none; }
 
+/* prompt-cache clock */
+.cache-clock { cursor: default; white-space: nowrap; }
+.cache-clock.cold { color: var(--faint); }
+
 /* agent map (sub-agent visualization) */
 #agent-pill { cursor: pointer; user-select: none; }
 #agent-pill.running { color: var(--accent); border-color: var(--accent); }

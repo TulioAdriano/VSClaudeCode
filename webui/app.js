@@ -15,6 +15,7 @@ const state = {
   running: false, working: false, mode: "default", model: "",
   sessionId: null, cwd: "", ideConnections: 0, mock: false,
   agents: new Map(), account: null,
+  cache: { lastWarm: null, ttlMs: 3600000 }, contextTokens: null,
   attachments: [], commands: [], models: [], toolCards: new Map(),
   liveMessage: null, liveBlocks: [], suggestToken: 0, suggestItems: [], suggestActive: 0,
   suggestKind: null, suggestAnchor: 0, autoScroll: true, initData: null,
@@ -816,6 +817,15 @@ function handleResult(m) {
   setWorking(false);
   finishLiveMessage();
   stopRunningAgents(); // a turn boundary means no sub-agent is still live
+  if (!state.replayingHistory) {
+    // Every completed turn (re)warms the prompt cache; the TTL comes from which
+    // ephemeral bucket the usage reports (1h on subscription sessions, else 5m).
+    const cc = (m.usage && m.usage.cache_creation) || {};
+    if ((cc.ephemeral_1h_input_tokens || 0) > 0) state.cache.ttlMs = 3600000;
+    else if ((cc.ephemeral_5m_input_tokens || 0) > 0) state.cache.ttlMs = 300000;
+    state.cache.lastWarm = Date.now();
+    renderCacheClock();
+  }
   const footer = document.createElement("div");
   footer.className = "turn-footer";
   const cost = typeof m.total_cost_usd === "number" && m.total_cost_usd > 0 ? "$" + m.total_cost_usd.toFixed(4) : "";
@@ -1224,6 +1234,10 @@ function handleHostMessage(data) {
       state.agents = new Map();
       updateAgentPill();
       $("agent-map").classList.add("hidden");
+      // Resumed sessions inherit warmth from the file's last write; fresh ones start unknown.
+      state.cache.lastWarm = data.lastActivity ? Date.parse(data.lastActivity) : null;
+      state.contextTokens = null;
+      renderCacheClock();
       state.sessionTitle = data.resume ? (state.pendingResumeTitle || null) : null;
       state.manualTitle = false;
       state.turnModel = null; state.historyModel = null;
@@ -1883,8 +1897,44 @@ function applyIdeSelection(data) {
   chip.classList.remove("hidden");
 }
 
+/* ---------- prompt-cache clock ---------- */
+
+/* Counts down the prompt cache's warmth (turns re-warm it; TTL from the usage's
+   ephemeral bucket). Cold shows how long the session idled and what a follow-up
+   would re-cache — the signal for "reply now or pay the re-cache". */
+function renderCacheClock() {
+  const chip = $("cache-clock");
+  if (!chip) return;
+  const w = state.cache.lastWarm;
+  if (!w) { chip.classList.add("hidden"); return; }
+  chip.classList.remove("hidden");
+  const left = w + state.cache.ttlMs - Date.now();
+  if (left > 0) {
+    const mins = Math.max(1, Math.round(left / 60000));
+    chip.textContent = "⏱ " + mins + "m";
+    chip.className = "pill cache-clock";
+    chip.title = "Prompt cache warm — about " + mins + " minute" + (mins === 1 ? "" : "s") +
+      " left. Following up while it's warm avoids re-caching the conversation.";
+  } else {
+    chip.textContent = "⏱ cold";
+    chip.className = "pill cache-clock cold";
+    chip.title = "Idle " + fmtIdle(Date.now() - w) +
+      " — the prompt cache has likely expired, so your next message will re-cache " +
+      (state.contextTokens ? "about " + Math.round(state.contextTokens / 1000) + "k tokens." : "the conversation.");
+  }
+}
+function fmtIdle(ms) {
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return m + "m";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h " + (m % 60) + "m";
+  return Math.floor(h / 24) + "d " + (h % 24) + "h";
+}
+setInterval(renderCacheClock, 30000);
+
 function applyContextUsage(data) {
   const used = data.totalTokens || data.used_tokens || data.usedTokens || data.tokens_used;
+  if (used) state.contextTokens = used; // re-cache size estimate for the cache clock
   const max = data.maxTokens || data.max_tokens || data.context_window;
   const bar = $("context-bar"), fill = $("context-fill");
   if (!used || !max) { bar.style.display = "none"; return; }
