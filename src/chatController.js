@@ -34,6 +34,9 @@ class ChatController {
     this._bridge = null;
     this._remoteState = "off"; // off | connecting | on
     this._remoteCseId = null;
+    // Compatibility mode: optional spawn flags an older CLI rejected get stripped.
+    this._compatDisabled = new Set();
+    this._compatRetries = 0;
     this._resumedFromHistory = false;
     this._firstUserPromptText = null;
     this._hadUserMessage = false;
@@ -262,10 +265,12 @@ class ChatController {
       workingDirectory: this._cwd,
       model,
       permissionMode: mode,
-      effort,
+      effort: this._compatDisabled.has("--effort") ? null : effort,
       resumeSessionId: resumeSessionId || null,
       registerSdkIdeServer: true,
-      forwardSubagentText: cfg.get("showSubagentActivity") !== false,
+      forwardSubagentText: cfg.get("showSubagentActivity") !== false && !this._compatDisabled.has("--forward-subagent-text"),
+      thinkingDisplay: this._compatDisabled.has("--thinking-display") ? null : undefined,
+      includePartialMessages: !this._compatDisabled.has("--include-partial-messages"),
       environment: {},
     });
     session.permissionHandler = (requestId, request, signal) =>
@@ -281,8 +286,22 @@ class ChatController {
     };
     session.onExited = (code) => {
       // Only surface exits of the CURRENT session (switches dispose the old process).
-      if (this._session === session)
-        this._post({ kind: "exited", code, stderr: session.recentStderr.join(" | ").slice(-300) || null });
+      if (this._session !== session) return;
+      const tail = session.recentStderr.join(" | ").slice(-300);
+      // Older CLI rejected a flag? Strip it and respawn (compatibility mode).
+      const STRIPPABLE = ["--forward-subagent-text", "--thinking-display", "--include-partial-messages", "--effort", "--prompt-suggestions"];
+      const m = /unknown option '(--[a-z0-9-]+)'/.exec(tail);
+      if (code === 1 && m && STRIPPABLE.includes(m[1]) && this._compatRetries < 3 && !this._compatDisabled.has(m[1])) {
+        this._compatDisabled.add(m[1]);
+        this._compatRetries++;
+        this.pushBanner("warning",
+          "Your Claude CLI doesn't support " + m[1] +
+          " — running without it (compatibility mode). Run `claude update` for the full experience.");
+        this._log("[compat] stripped " + m[1] + " and respawning");
+        this.startSession(resumeSessionId || null, prefs || null);
+        return;
+      }
+      this._post({ kind: "exited", code, stderr: tail || null });
     };
 
     // Resumed sessions carry the LAST MESSAGE ENTRY's timestamp so the cache clock

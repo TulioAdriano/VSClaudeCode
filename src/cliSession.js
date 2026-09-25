@@ -15,13 +15,9 @@ function resolveExecutable(configured) {
   if (configured && fs.existsSync(configured)) return configured;
   const home = os.homedir();
   const exeNames = process.platform === "win32" ? ["claude.exe", "claude.cmd"] : ["claude"];
-  const candidates = [
-    path.join(home, ".local", "bin", exeNames[0]),
-    process.platform === "win32"
-      ? path.join(process.env.APPDATA || "", "npm", "claude.cmd")
-      : path.join(home, ".npm-global", "bin", "claude"),
-  ];
-  for (const c of candidates) if (c && fs.existsSync(c)) return c;
+  // PATH first: match whatever the user's own terminal runs. Probing known install
+  // dirs BEFORE PATH once picked up a stale ~/.local/bin/claude.exe (abandoned
+  // native install) while the terminal used a current npm shim.
   for (const dir of (process.env.PATH || "").split(path.delimiter)) {
     for (const name of exeNames) {
       try {
@@ -30,6 +26,13 @@ function resolveExecutable(configured) {
       } catch { /* malformed PATH entry */ }
     }
   }
+  const candidates = [
+    path.join(home, ".local", "bin", exeNames[0]),
+    process.platform === "win32"
+      ? path.join(process.env.APPDATA || "", "npm", "claude.cmd")
+      : path.join(home, ".npm-global", "bin", "claude"),
+  ];
+  for (const c of candidates) if (c && fs.existsSync(c)) return c;
   return exeNames[0];
 }
 
