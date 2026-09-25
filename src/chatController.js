@@ -285,16 +285,12 @@ class ChatController {
         this._post({ kind: "exited", code });
     };
 
-    // Resumed sessions carry the file's last write so the cache clock can show
-    // warmth (or how long the session idled) before the first new turn.
+    // Resumed sessions carry the LAST MESSAGE ENTRY's timestamp so the cache clock
+    // reflects real API activity — never the file mtime, which the CLI bumps at
+    // resume-spawn (metadata rewrites), falsely warming the clock on a mere open.
     let lastActivity = null;
     if (resumeSessionId) {
-      try {
-        for (const dir of sessionStore.getProjectDirectoryCandidates(this._cwd)) {
-          const file = path.join(dir, resumeSessionId + ".jsonl");
-          if (fs.existsSync(file)) { lastActivity = fs.statSync(file).mtime.toISOString(); break; }
-        }
-      } catch { }
+      try { lastActivity = sessionStore.getLastMessageTimestampUtc(this._cwd, resumeSessionId); } catch { }
     }
     this._post({ kind: "sessionStarting", resume: resumeSessionId || null, lastActivity });
 

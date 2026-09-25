@@ -228,6 +228,39 @@ function isSameWorkspaceFamily(a, b) {
   return na.startsWith(nb + path.sep) || nb.startsWith(na + path.sep);
 }
 
+/** UTC ISO timestamp of the session's last real message entry (user/assistant),
+ *  read from the file tail. NOT the file mtime: the CLI rewrites tail metadata
+ *  (last-prompt, mode, bridge-session…) at resume-spawn, so mtime moves on a mere
+ *  open — which made the cache clock claim warmth without any API turn. */
+function getLastMessageTimestampUtc(cwd, sessionId) {
+  for (const dir of getProjectDirectoryCandidates(cwd)) {
+    const file = path.join(dir, sessionId + ".jsonl");
+    if (!fs.existsSync(file)) continue;
+    try {
+      const TAIL = 256 * 1024;
+      const stat = fs.statSync(file);
+      const fd = fs.openSync(file, "r");
+      const start = Math.max(0, stat.size - TAIL);
+      const buf = Buffer.alloc(stat.size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      fs.closeSync(fd);
+      let lines = buf.toString("utf8").split("\n");
+      if (start > 0) lines = lines.slice(1); // discard a partial first line
+      let last = null;
+      for (const line of lines) {
+        if (!line.includes('"timestamp"')) continue;
+        if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"') && !line.includes('"type":"message"')) continue;
+        try {
+          const ts = JSON.parse(line).timestamp;
+          if (ts && !isNaN(Date.parse(ts))) last = ts;
+        } catch { /* malformed line */ }
+      }
+      if (last) return last;
+    } catch { /* unreadable file */ }
+  }
+  return null;
+}
+
 /** Custom title (file tail) first, else the CLI's generated summary near the head. */
 function getStoredSessionTitle(cwd, sessionId) {
   for (const dir of getProjectDirectoryCandidates(cwd)) {
@@ -293,6 +326,7 @@ module.exports = {
   listForeignSessions,
   adoptSession,
   isSameWorkspaceFamily,
+  getLastMessageTimestampUtc,
   getStoredSessionTitle,
   readTranscriptAll,
 };
