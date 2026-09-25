@@ -15,7 +15,7 @@ const state = {
   running: false, working: false, mode: "default", model: "",
   sessionId: null, cwd: "", ideConnections: 0, mock: false,
   agents: new Map(), account: null,
-  cache: { lastWarm: null, ttlMs: 3600000 }, contextTokens: null,
+  cache: { lastWarm: null, ttlMs: 3600000, compacted: false, modelSwitched: false, lastModel: null }, contextTokens: null,
   attachments: [], commands: [], models: [], toolCards: new Map(),
   liveMessage: null, liveBlocks: [], suggestToken: 0, suggestItems: [], suggestActive: 0,
   suggestKind: null, suggestAnchor: 0, autoScroll: true, initData: null,
@@ -818,13 +818,21 @@ function handleResult(m) {
   finishLiveMessage();
   stopRunningAgents(); // a turn boundary means no sub-agent is still live
   if (!state.replayingHistory) {
-    // Every completed turn (re)warms the prompt cache; the TTL comes from which
-    // ephemeral bucket the usage reports (1h on subscription sessions, else 5m).
-    const cc = (m.usage && m.usage.cache_creation) || {};
-    if ((cc.ephemeral_1h_input_tokens || 0) > 0) state.cache.ttlMs = 3600000;
-    else if ((cc.ephemeral_5m_input_tokens || 0) > 0) state.cache.ttlMs = 300000;
-    state.cache.lastWarm = Date.now();
-    renderCacheClock();
+    // A turn (re)warms the clock only with EVIDENCE: the usage must show cache
+    // activity (read or creation > 0) — matching the official extension's gating.
+    // The TTL comes from which ephemeral bucket the usage reports (1h on
+    // subscription sessions, else 5m). Warmth clears compaction/switch staleness.
+    const u = m.usage || {};
+    const cacheActive = (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) > 0;
+    if (cacheActive) {
+      const cc = u.cache_creation || {};
+      if ((cc.ephemeral_1h_input_tokens || 0) > 0) state.cache.ttlMs = 3600000;
+      else if ((cc.ephemeral_5m_input_tokens || 0) > 0) state.cache.ttlMs = 300000;
+      state.cache.lastWarm = Date.now();
+      state.cache.compacted = false;
+      state.cache.modelSwitched = false;
+      renderCacheClock();
+    }
   }
   const footer = document.createElement("div");
   footer.className = "turn-footer";
@@ -1192,7 +1200,16 @@ function handleHostMessage(data) {
     case "state": applyState(data.state); break;
     case "init": applyInit(data.data); state.initReceived = true; flushPendingRetry(); break;
     case "models": applyModelsPush(data.models); break;
-    case "modelSet": acceptPendingCustomModel(data.model); break;
+    case "modelSet":
+      acceptPendingCustomModel(data.model);
+      // Caches are per-model: a switch means the NEXT message re-caches for the new
+      // model, whatever the countdown said. (The official extension doesn't track this.)
+      if (state.cache.lastModel != null && state.cache.lastModel !== data.model) {
+        state.cache.modelSwitched = true;
+        renderCacheClock();
+      }
+      state.cache.lastModel = data.model;
+      break;
     case "modelRejected": rejectPendingCustomModel(data.model); break;
     case "permission": showPermission(data.requestId, data.request); break;
     case "permissionCancel": resolvePermCard(data.requestId, "Handled elsewhere"); break;
@@ -1234,8 +1251,11 @@ function handleHostMessage(data) {
       state.agents = new Map();
       updateAgentPill();
       $("agent-map").classList.add("hidden");
-      // Resumed sessions inherit warmth from the file's last write; fresh ones start unknown.
+      // Resumed sessions inherit warmth from the last message timestamp; fresh ones start unknown.
       state.cache.lastWarm = data.lastActivity ? Date.parse(data.lastActivity) : null;
+      state.cache.compacted = false;
+      state.cache.modelSwitched = false;
+      state.cache.lastModel = null;
       state.contextTokens = null;
       renderCacheClock();
       state.sessionTitle = data.resume ? (state.pendingResumeTitle || null) : null;
@@ -1482,6 +1502,12 @@ function handleClaude(m) {
         break;
       }
       if (m.subtype === "status") { if (m.status) setWorking(true); if (m.permissionMode) { state.mode = m.permissionMode; $("mode-select").value = m.permissionMode; } break; }
+      if (m.subtype === "compact_boundary") {
+        // Compaction rewrites the prompt prefix — the cache no longer covers it.
+        state.cache.compacted = true;
+        if (!state.replayingHistory) renderCacheClock();
+        break;
+      }
       if (m.subtype === "session_state_changed") { if (m.state === "idle") setWorking(false); else if (m.state === "running") setWorking(true); break; }
       if (m.subtype === "permission_denied") {
         banner("warning", "Auto-denied " + m.tool_name + (m.decision_reason ? " — " + m.decision_reason : ""));
@@ -1537,6 +1563,8 @@ function applyState(s) {
   const cwdEl = $("cwd");
   cwdEl.textContent = shortPath(state.cwd);
   cwdEl.title = state.cwd + (s.exePath ? "\nCLI: " + s.exePath : "");
+  // Seed the cache clock's model tracking so the FIRST switch is detected too.
+  if (state.cache.lastModel == null) state.cache.lastModel = s.model != null ? s.model : "default";
   state.remote = s.remote || "off";
   const rbtn = $("btn-remote");
   if (rbtn) {
@@ -1926,6 +1954,22 @@ function applyIdeSelection(data) {
 function renderCacheClock() {
   const chip = $("cache-clock");
   if (!chip) return;
+  // Staleness beats the countdown: these mean the NEXT message re-caches even
+  // though a cache may technically still be warm somewhere.
+  if (state.cache.compacted) {
+    chip.classList.remove("hidden");
+    chip.textContent = "⏱ cold";
+    chip.className = "pill cache-clock cold";
+    chip.title = "The conversation was compacted — the prompt cache no longer covers it, so your next message will re-cache it.";
+    return;
+  }
+  if (state.cache.modelSwitched) {
+    chip.classList.remove("hidden");
+    chip.textContent = "⏱ cold";
+    chip.className = "pill cache-clock cold";
+    chip.title = "Model changed — your next message re-caches the conversation for the new model. The previous model's cache stays warm on its own timer, so switching back soon may still hit it.";
+    return;
+  }
   const w = state.cache.lastWarm;
   if (!w) { chip.classList.add("hidden"); return; }
   chip.classList.remove("hidden");
