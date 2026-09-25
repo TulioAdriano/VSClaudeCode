@@ -1587,13 +1587,34 @@ const PREVIOUS_MODELS = [
 /* "Opus" alone doesn't say WHICH Opus. The CLI catalog's description leads with the
    resolved version ("Opus 4.8 with 1M context · Best for…"), so use that segment as
    the visible label; the tail and the concrete model id go into the tooltip. */
+/* Labels are model NAMES (with version), never blurbs — blurbs live in the tooltip.
+   Handles both catalog formats: pre-2.1.28x hid "Name Version" in the description's
+   first segment ("Opus 4.8 · Most capable…") behind a bare displayName ("Opus");
+   2.1.28x+ versions the displayName itself ("Opus 5.5") and makes the description a
+   pure blurb ("Best for everyday, complex tasks") — which the old parser leaked
+   into the picker as the label. */
 function modelOptionLabel(m) {
   const dn = (m.displayName || m.value || "").trim();
-  let seg = (m.description || "").split(/\s+[·•‧∙–—|]\s+/)[0].trim();
-  if (seg.length > 44) seg = seg.slice(0, 44).trimEnd() + "…";
-  if (!seg) return dn;
-  if (/^default/i.test(dn)) return "Default: " + seg;
-  return seg;
+  const seg = (m.description || "").split(/\s+[·•‧∙–—|]\s+/)[0].trim();
+  // "1M"-style qualifiers aren't versions; "5.5", "5", "4.8" are.
+  const hasVersion = s => /\b\d+(?:\.\d+)*\b(?![Mm])/.test(s || "");
+  const paren = (dn.match(/\([^)]*\)/) || [""])[0];
+  if (/^default/i.test(dn)) {
+    const friendly = m.resolvedModel ? friendlyModelName(m.resolvedModel)
+      : (hasVersion(seg) && seg.length <= 24 ? seg : "");
+    return friendly ? "Default: " + friendly : dn;
+  }
+  if (hasVersion(dn)) return dn;
+  const segName =
+    /^[A-Za-z][\w-]*\s+v?\d[\d.]*$/.test(seg) ? seg
+    : /^v?\d[\d.]+$/.test(seg) ? (dn.replace(/\s*\(.*$/, "") + " " + seg).trim()
+    : "";
+  if (segName) return paren && segName.indexOf("(") < 0 ? segName + " " + paren : segName;
+  if (m.resolvedModel) {
+    const friendly = friendlyModelName(m.resolvedModel);
+    if (hasVersion(friendly)) return paren ? friendly + " " + paren : friendly;
+  }
+  return dn;
 }
 
 function modelOptionTitle(m) {
