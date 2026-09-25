@@ -282,7 +282,7 @@ class ChatController {
     session.onExited = (code) => {
       // Only surface exits of the CURRENT session (switches dispose the old process).
       if (this._session === session)
-        this._post({ kind: "exited", code });
+        this._post({ kind: "exited", code, stderr: session.recentStderr.join(" | ").slice(-300) || null });
     };
 
     // Resumed sessions carry the LAST MESSAGE ENTRY's timestamp so the cache clock

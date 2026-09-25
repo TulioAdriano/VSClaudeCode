@@ -1302,7 +1302,10 @@ function handleHostMessage(data) {
       setWorking(false);
       hideLoading();
       if (!state.signinRequired)
-        banner("warning", "The Claude process exited (code " + data.code + ").", [["Restart", () => post({ cmd: "newSession" })]]);
+        banner("warning",
+          "The Claude process exited (code " + data.code + ")." +
+          (data.stderr ? " — " + data.stderr : ""),
+          [["Restart", () => post({ cmd: "newSession" })]]);
       break;
   }
 }

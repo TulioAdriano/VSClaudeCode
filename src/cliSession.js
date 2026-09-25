@@ -66,6 +66,7 @@ class ClaudeCliSession {
     this.onMessage = null;        // (rawObj) => void
     this.onStderr = null;         // (line) => void
     this.onExited = null;         // (code) => void
+    this.recentStderr = [];       // last few stderr lines (spawn-death diagnostics)
     this.permissionHandler = null; // async (requestId, request, signal) => decision JObject
     this.mcpMessageHandler = null; // async (serverName, jsonrpc) => jsonrpc response
     this.lastSessionId = null;
@@ -118,6 +119,11 @@ class ClaudeCliSession {
       try { this._dispatch(msg); } catch (e) { /* consumer error must not kill the pump */ }
     });
     readline.createInterface({ input: proc.stderr }).on("line", (line) => {
+      // Keep the tail so a spawn-death banner can show the CLI's dying words.
+      if (line && line.trim()) {
+        this.recentStderr.push(line.trim());
+        if (this.recentStderr.length > 8) this.recentStderr.shift();
+      }
       if (this.onStderr) this.onStderr(line);
     });
   }
